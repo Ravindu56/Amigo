@@ -1,26 +1,38 @@
 import React from 'react';
-import Header from '../components/Header'; // Import your new Header
+import Header from '../components/Header';
 import { FaVideo, FaKeyboard, FaCalendarPlus, FaDesktop, FaEllipsisH } from 'react-icons/fa';
-import './styles/Dashboard.css'; // Make sure this path matches your folder structure
-import { useNavigate } from 'react-router-dom'
-import Footer from '../components/Footer'; // Import your new Footer
+import './styles/Dashboard.css';
+import { useNavigate } from 'react-router-dom';
+import Footer from '../components/Footer';
+import { useAuth } from '../context/AuthContext';
 
 const Dashboard = () => {
-
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const currentDate = new Date().toLocaleDateString('en-US', { weekday: 'long', day: 'numeric', month: 'long' });
+
+  // Dynamic greeting based on time of day
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good Morning';
+    if (hour < 17) return 'Good Afternoon';
+    return 'Good Evening';
+  };
+
+  // Use first name only from fullName (e.g. "John Doe" -> "John")
+  const firstName = user?.fullName?.split(' ')[0] || 'there';
 
   return (
     <div className="dashboard-wrapper">
       <Header />
 
       <main className="dashboard-content">
-        
+
         {/* 1. Welcome & Time Section */}
         <section className="welcome-banner">
           <div className="welcome-info">
-            <h1>Good Afternoon, Alex</h1>
+            <h1>{getGreeting()}, {firstName} 👋</h1>
             <p className="date-text">{currentDate} • You have 2 meetings today</p>
           </div>
           <div className="primary-action" onClick={() => navigate('/new-meeting')}>
@@ -32,7 +44,7 @@ const Dashboard = () => {
           </div>
         </section>
 
-        {/* 2. Quick Actions Bar (Clean, Professional Icons) */}
+        {/* 2. Quick Actions Bar */}
         <section className="quick-actions">
           <div className="action-card" onClick={() => navigate('/join')}>
             <div className="icon-box blue"><FaKeyboard /></div>
@@ -41,7 +53,7 @@ const Dashboard = () => {
               <p>Enter ID</p>
             </div>
           </div>
-          
+
           <div className="action-card" onClick={() => navigate('/schedule-meeting')}>
             <div className="icon-box purple"><FaCalendarPlus /></div>
             <div className="action-details">
@@ -61,8 +73,8 @@ const Dashboard = () => {
 
         {/* 3. Main Data Area (Split View) */}
         <div className="data-split-view">
-          
-          {/* Left: Upcoming Meetings (Table) */}
+
+          {/* Left: Upcoming Meetings */}
           <section className="data-section main-table">
             <div className="section-header">
               <h2>Upcoming Meetings</h2>
@@ -70,7 +82,6 @@ const Dashboard = () => {
             </div>
 
             <div className="meeting-table">
-              {/* Row 1 */}
               <div className="table-row">
                 <div className="time-col">
                   <span className="time-large">02:30</span>
@@ -85,7 +96,6 @@ const Dashboard = () => {
                 </div>
               </div>
 
-              {/* Row 2 */}
               <div className="table-row">
                 <div className="time-col">
                   <span className="time-large">04:00</span>
@@ -102,13 +112,13 @@ const Dashboard = () => {
             </div>
           </section>
 
-          {/* Right: Recent History (List) */}
+          {/* Right: Recent History */}
           <aside className="data-section side-list">
             <div className="section-header">
               <h2>Recent History</h2>
               <FaEllipsisH className="more-options" />
             </div>
-            
+
             <div className="history-list-compact">
               <div className="history-row">
                 <div className="status-dot"></div>
@@ -135,15 +145,15 @@ const Dashboard = () => {
           </aside>
         </div>
       </main>
-      <Footer/>
+      <Footer />
     </div>
   );
 };
 
-// Helper icon for button
+// Helper chevron icon
 const FaChevronDown = () => (
   <svg width="10" height="6" viewBox="0 0 10 6" fill="none">
-    <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );
 
