@@ -6,6 +6,13 @@ const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const db = require('./api/models');
 
+// ─── CUSTOM CONSOLE LOGGER ────────────────────────────────────────────────────
+// Formats logs with timestamps, emojis, and categories for easier debugging
+const log = (emoji, category, message) => {
+    const time = new Date().toLocaleTimeString();
+    console.log(`[${time}] ${emoji} [${category}] ${message}`);
+};
+
 const app = express();
 const server = http.createServer(app);
 
@@ -32,6 +39,7 @@ const authRoutes = require('./api/routes/authRoutes');
 app.use('/api/auth', authRoutes);
 
 app.get('/', (req, res) => {
+    log('🌐', 'HTTP', 'GET / (Root) endpoint accessed');
     res.send('✅ Amigo Backend Server is Running!');
 });
 
@@ -41,7 +49,7 @@ const rooms = {};
 
 // ─── SOCKET.IO – REAL-TIME WEBRTC SIGNALING ───────────────────────────────────
 io.on('connection', (socket) => {
-    console.log(`⚡ New Connection: ${socket.id}`);
+    log('⚡', 'Socket', `New Connection: ${socket.id}`);
 
     // ── 1. JOIN ROOM ──────────────────────────────────────────────────────────
     socket.on('join-room', ({ roomId, userName }) => {
@@ -59,37 +67,43 @@ io.on('connection', (socket) => {
         // Notify all other users in the room
         socket.to(roomId).emit('user-connected', { socketId: socket.id, userName });
 
-        console.log(`📌 [${roomId}] ${userName} joined. Total: ${rooms[roomId].length}`);
+        log('📌', 'Room', `${userName} joined [${roomId}]. Total users: ${rooms[roomId].length}`);
     });
 
     // ── 2. SDP OFFER (Initiator → New User) ──────────────────────────────────
-    // The joining user creates a Peer(initiator:true) and sends the offer signal
     socket.on('sending-signal', ({ userToSignal, signal, callerID, userName }) => {
+        log('📡', 'WebRTC', `SDP Offer: ${userName} (${callerID}) ➔ User(${userToSignal})`);
         io.to(userToSignal).emit('user-joined', { signal, callerID, userName });
     });
 
     // ── 3. SDP ANSWER (Non-Initiator → Initiator) ────────────────────────────
-    // The existing user accepts the offer and returns their answer signal
     socket.on('returning-signal', ({ signal, callerID }) => {
+        log('📡', 'WebRTC', `SDP Answer: User(${socket.id}) ➔ Initiator(${callerID})`);
         io.to(callerID).emit('receiving-returned-signal', { signal, id: socket.id });
     });
 
     // ── 4. CHAT MESSAGE RELAY ─────────────────────────────────────────────────
     socket.on('send-message', ({ roomId, message, userName, time }) => {
+        log('💬', 'Chat', `Message from ${userName} in [${roomId}]`);
         socket.to(roomId).emit('receive-message', { message, userName, time });
     });
 
     // ── 5. DISCONNECT ─────────────────────────────────────────────────────────
     socket.on('disconnect', () => {
-        console.log(`❌ Disconnected: ${socket.id}`);
+        log('❌', 'Socket', `Disconnected: ${socket.id}`);
 
         for (const roomId in rooms) {
             const idx = rooms[roomId].findIndex(u => u.socketId === socket.id);
             if (idx !== -1) {
                 const [removed] = rooms[roomId].splice(idx, 1);
                 socket.to(roomId).emit('user-disconnected', socket.id);
-                console.log(`🚪 ${removed.userName} left room [${roomId}]`);
-                if (rooms[roomId].length === 0) delete rooms[roomId];
+                
+                log('🚪', 'Room', `${removed.userName} left [${roomId}]. Remaining: ${rooms[roomId].length}`);
+                
+                if (rooms[roomId].length === 0) {
+                    delete rooms[roomId];
+                    log('🗑️', 'Room', `Room [${roomId}] is empty and was deleted.`);
+                }
                 break;
             }
         }
@@ -98,13 +112,16 @@ io.on('connection', (socket) => {
 
 // ─── DATABASE SYNC ────────────────────────────────────────────────────────────
 db.sequelize.sync()
-    .then(() => console.log('✅ Database synced successfully.'))
-    .catch((err) => console.log('❌ DB sync failed: ' + err.message));
+    .then(() => log('✅', 'Database', 'MySQL Synced successfully.'))
+    .catch((err) => log('❌', 'Database', 'Sync failed: ' + err.message));
 
 // ─── START SERVER ─────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-    console.log(`\n🚀 Amigo Server running on port ${PORT}`);
-    console.log(`🔗 http://localhost:${PORT}`);
-    console.log(`📡 Socket.IO WebRTC Signaling: ACTIVE`);
+    console.log('\n==================================================');
+    log('🚀', 'Server', `Amigo Backend running on PORT: ${PORT}`);
+    log('🔗', 'Server', `URL: http://localhost:${PORT}`);
+    log('⚙️', 'Config', `Environment: ${process.env.NODE_ENV || 'development'}`);
+    log('📡', 'WebRTC', `Socket.IO Signaling is ACTIVE`);
+    console.log('==================================================\n');
 });
