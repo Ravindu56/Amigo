@@ -1,17 +1,10 @@
 /**
  * Room.jsx — WebRTC Video Room
- *
- * Uses native browser RTCPeerConnection (no simple-peer dependency).
- * Signaling is handled by Socket.IO events defined in amigo-backend/server.js.
- *
- * Backend API calls wired in Phase 4:
- *   • meetingAPI.end(roomId)           — called by host on End Call
- *   • recordingAPI.create(payload)     — called when a local recording is saved
- *
- * Signal flow:
- *   Existing user (caller)  ─── offer  ──►  New user (answerer)
- *   New user (answerer)     ─── answer ──►  Existing user (caller)
- *   Both peers              ◄── ice-candidate ──► Both peers
+ * BUG FIXES:
+ *   1. height:100dvh instead of 100vh → no overflow under browser chrome
+ *   2. Camera only starts INSIDE Room, never leaks to other pages
+ *   3. initVideo/initAudio default FALSE — user opts in via PreJoinLobby
+ *   4. Full Tailwind dark-room theme, Room.css purged
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
@@ -20,16 +13,11 @@ import {
   FaMicrophone, FaMicrophoneSlash, FaVideo, FaVideoSlash,
   FaDesktop, FaPhoneSlash, FaComments, FaUserFriends,
   FaChevronRight, FaPaperPlane, FaExpand, FaCompress,
-  FaCircle, FaStop,
+  FaCircle, FaStop, FaLock,
 } from 'react-icons/fa';
-import './styles/Room.css';
 import { meetingAPI, recordingAPI } from '../services/api';
 
-// ---------------------------------------------------------------------------
-// CONFIG
-// ---------------------------------------------------------------------------
 const SOCKET_SERVER = import.meta.env.VITE_SOCKET_SERVER || 'http://localhost:5000';
-
 const RTC_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -37,107 +25,245 @@ const RTC_CONFIG = {
   ],
 };
 
-// ---------------------------------------------------------------------------
-// RemoteVideo — isolated so each peer's stream gets its own ref.
-// ---------------------------------------------------------------------------
+// ── RemoteVideo tile ────────────────────────────────────────────────────────
 const RemoteVideo = React.memo(({ peerId, peerName, streamRef }) => {
   const videoRef = useRef(null);
   useEffect(() => {
-    if (videoRef.current && streamRef.current) {
+    if (videoRef.current && streamRef.current)
       videoRef.current.srcObject = streamRef.current;
-    }
   }, [streamRef]);
   return (
-    <div className="video-tile">
-      <video
-        ref={videoRef}
-        autoPlay playsInline
-        style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '12px' }}
-      />
-      <span className="participant-label">{peerName}</span>
+    <div className="relative bg-slate-800 rounded-2xl overflow-hidden aspect-video flex items-center justify-center">
+      <video ref={videoRef} autoPlay playsInline
+        className="w-full h-full object-cover" />
+      <span className="absolute bottom-2 left-3 text-xs text-white/80 font-medium
+                       bg-black/40 px-2 py-0.5 rounded-full">{peerName}</span>
     </div>
   );
 });
 RemoteVideo.displayName = 'RemoteVideo';
 
-// ---------------------------------------------------------------------------
-// MAIN COMPONENT
-// ---------------------------------------------------------------------------
+// ── PreJoinLobby ─────────────────────────────────────────────────────────────
+// Shown before entering the room so user can check cam/mic WITHOUT being live.
+const PreJoinLobby = ({ roomId, title, userName, isHost, meetingId, onJoin, onCancel }) => {
+  const videoRef  = useRef(null);
+  const streamRef = useRef(null);
+  const [camOn,  setCamOn]  = useState(true);
+  const [micOn,  setMicOn]  = useState(true);
+  const [error,  setError]  = useState('');
+  const [ready,  setReady]  = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      .then(stream => {
+        if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
+        streamRef.current = stream;
+        if (videoRef.current) videoRef.current.srcObject = stream;
+        setReady(true);
+      })
+      .catch(err => {
+        if (!active) return;
+        setError(err.name === 'NotAllowedError'
+          ? 'Camera/mic denied. You can still join with both off.'
+          : `Media error: ${err.message}`);
+        setReady(true);
+      });
+    return () => {
+      active = false;
+      streamRef.current?.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
+  const toggleCam = () => {
+    const track = streamRef.current?.getVideoTracks()[0];
+    if (track) { track.enabled = !track.enabled; setCamOn(v => !v); }
+    else setCamOn(false);
+  };
+  const toggleMic = () => {
+    const track = streamRef.current?.getAudioTracks()[0];
+    if (track) { track.enabled = !track.enabled; setMicOn(v => !v); }
+    else setMicOn(false);
+  };
+
+  const handleJoin = () => {
+    // Stop preview stream — Room.jsx will acquire a fresh stream
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    onJoin({ video: camOn, audio: micOn });
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6">
+      <div className="w-full max-w-2xl space-y-6">
+        {/* Title */}
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-white">{title}</h1>
+          <p className="text-slate-400 text-sm mt-1">Check your camera and mic before joining</p>
+        </div>
+
+        {/* Preview */}
+        <div className="relative bg-slate-800 rounded-2xl overflow-hidden aspect-video
+                        flex items-center justify-center">
+          <video ref={videoRef} autoPlay playsInline muted
+            className={`w-full h-full object-cover transition-opacity duration-300
+                        ${camOn ? 'opacity-100' : 'opacity-0'}`} />
+          {(!camOn || !ready) && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center">
+              <div className="w-16 h-16 rounded-full bg-slate-600 flex items-center justify-center
+                              text-2xl font-bold text-white">
+                {userName.charAt(0).toUpperCase()}
+              </div>
+              <p className="text-slate-400 text-sm mt-3">{camOn ? 'Connecting camera…' : 'Camera off'}</p>
+            </div>
+          )}
+          <span className="absolute bottom-3 left-4 text-xs text-white/70 bg-black/40
+                           px-2 py-0.5 rounded-full">{userName} (You)</span>
+        </div>
+
+        {error && (
+          <div className="bg-yellow-900/40 border border-yellow-700 text-yellow-300
+                          text-sm px-4 py-2.5 rounded-xl">{error}</div>
+        )}
+
+        {/* Cam / Mic toggles */}
+        <div className="flex gap-3 justify-center">
+          <button onClick={toggleCam}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm
+                        transition-all duration-200
+                        ${camOn
+                          ? 'bg-slate-700 text-white hover:bg-slate-600'
+                          : 'bg-red-600 text-white hover:bg-red-700'}`}>
+            {camOn ? <FaVideo /> : <FaVideoSlash />}
+            {camOn ? 'Camera On' : 'Camera Off'}
+          </button>
+          <button onClick={toggleMic}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm
+                        transition-all duration-200
+                        ${micOn
+                          ? 'bg-slate-700 text-white hover:bg-slate-600'
+                          : 'bg-red-600 text-white hover:bg-red-700'}`}>
+            {micOn ? <FaMicrophone /> : <FaMicrophoneSlash />}
+            {micOn ? 'Mic On' : 'Mic Off'}
+          </button>
+        </div>
+
+        {/* Join / Cancel */}
+        <div className="flex gap-3">
+          <button onClick={onCancel}
+            className="flex-1 py-3 rounded-xl bg-slate-700 text-white font-semibold
+                       hover:bg-slate-600 transition-all duration-200">
+            Cancel
+          </button>
+          <button onClick={handleJoin} disabled={!ready}
+            className="flex-1 py-3 rounded-xl bg-sage-500 text-white font-bold
+                       hover:bg-sage-600 disabled:opacity-50 disabled:cursor-not-allowed
+                       transition-all duration-200">
+            {ready ? 'Join Meeting' : 'Connecting…'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const formatMeetingTime = (isoDate) => {
+  if (!isoDate) return 'Instant';
+  const d = new Date(isoDate);
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  const timeStr = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  return isToday ? `Today ${timeStr}` : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ` ${timeStr}`;
+};
+
+// ── MAIN ROOM ─────────────────────────────────────────────────────────────────
 const Room = () => {
   const navigate   = useNavigate();
   const { roomId } = useParams();
   const location   = useLocation();
 
   const {
-    meetingId = null,          // DB primary key of the meeting (from NewMeeting/JoinMeeting)
-    isHost    = false,         // true  → End Call calls meetingAPI.end()
+    meetingId = null,
+    isHost    = false,
     userName  = 'You',
     title     = `Room ${roomId}`,
-    audio: initAudio = true,
-    video: initVideo = true,
   } = location.state || {};
 
-  // ── Refs (never cause re-renders) ──────────────────────────────────────
-  const socketRef        = useRef(null);
-  const myVideoRef       = useRef(null);
-  const myStreamRef      = useRef(null);
-  const isCleanedUp      = useRef(false);
-  const hasEndedMeeting  = useRef(false);   // guard: API called at most once
-  const chatBottomRef    = useRef(null);
-  const meetingStartRef  = useRef(Date.now()); // for elapsed-duration tracking
+  // ── Show PreJoin lobby until user clicks "Join" ──────────────────────────
+  const [joined,     setJoined]     = useState(false);
+  const [initAudio,  setInitAudio]  = useState(false);  // set by lobby
+  const [initVideo,  setInitVideo]  = useState(false);  // set by lobby
 
-  // pcsRef: Map<peerId, { pc: RTCPeerConnection, streamRef: { current: MediaStream } }>
-  const pcsRef = useRef(new Map());
+  const handleLobbyJoin = useCallback(({ video, audio }) => {
+    setInitVideo(video);
+    setInitAudio(audio);
+    setJoined(true);
+  }, []);
 
-  // ── Recording refs ─────────────────────────────────────────────────────
-  const mediaRecorderRef   = useRef(null);
-  const recordedChunksRef  = useRef([]);
-  const recordingStartRef  = useRef(null);  // Date when recording started
+  const handleLobbyCancel = useCallback(() => navigate('/dashboard'), [navigate]);
 
-  // ── State ──────────────────────────────────────────────────────────────
-  const [peers, setPeers]                   = useState([]);
-  const [micOn, setMicOn]                   = useState(initAudio);
-  const [videoOn, setVideoOn]               = useState(initVideo);
-  const [screenShare, setScreenShare]       = useState(false);
-  const [sidePanelOpen, setSidePanelOpen]   = useState(false);
-  const [activeTab, setActiveTab]           = useState('chat');
-  const [isFullscreen, setIsFullscreen]     = useState(false);
-  const [messages, setMessages]             = useState([]);
-  const [newMessage, setNewMessage]         = useState('');
-  const [time, setTime]                     = useState(new Date());
-  const [mediaError, setMediaError]         = useState(null);
-  const [isRecording, setIsRecording]       = useState(false);
+  // ── Refs ──────────────────────────────────────────────────────────────────
+  const socketRef       = useRef(null);
+  const myVideoRef      = useRef(null);
+  const myStreamRef     = useRef(null);
+  const isCleanedUp     = useRef(false);
+  const hasEndedMeeting = useRef(false);
+  const chatBottomRef   = useRef(null);
+  const meetingStartRef = useRef(null);
+  const pcsRef          = useRef(new Map());
+  const mediaRecorderRef  = useRef(null);
+  const recordedChunksRef = useRef([]);
+  const recordingStartRef = useRef(null);
+
+  // ── State ─────────────────────────────────────────────────────────────────
+  const [peers,           setPeers]           = useState([]);
+  const [micOn,           setMicOn]           = useState(false);
+  const [videoOn,         setVideoOn]         = useState(false);
+  const [screenShare,     setScreenShare]     = useState(false);
+  const [sidePanelOpen,   setSidePanelOpen]   = useState(false);
+  const [activeTab,       setActiveTab]       = useState('chat');
+  const [isFullscreen,    setIsFullscreen]    = useState(false);
+  const [messages,        setMessages]        = useState([]);
+  const [newMessage,      setNewMessage]      = useState('');
+  const [time,            setTime]            = useState(new Date());
+  const [mediaError,      setMediaError]      = useState(null);
+  const [isRecording,     setIsRecording]     = useState(false);
   const [recordingSaving, setRecordingSaving] = useState(false);
-  const [endingCall, setEndingCall]         = useState(false);   // disables End btn
-  const [recordingError, setRecordingError] = useState('');
+  const [endingCall,      setEndingCall]      = useState(false);
+  const [recordingError,  setRecordingError]  = useState('');
+  const [elapsed,         setElapsed]         = useState('00:00');
 
-  // ── Clock ──────────────────────────────────────────────────────────────
+  // ── Clock ─────────────────────────────────────────────────────────────────
   useEffect(() => {
-    const t = setInterval(() => setTime(new Date()), 1000);
+    const t = setInterval(() => {
+      setTime(new Date());
+      if (meetingStartRef.current) {
+        const ms   = Date.now() - meetingStartRef.current;
+        const mins = Math.floor(ms / 60000);
+        const secs = Math.floor((ms % 60000) / 1000);
+        setElapsed(`${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`);
+      }
+    }, 1000);
     return () => clearInterval(t);
   }, []);
 
-  // ── Auto-scroll chat ───────────────────────────────────────────────────
+  // ── Auto-scroll chat ──────────────────────────────────────────────────────
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // ── WebRTC helpers (unchanged from original) ───────────────────────────
+  // ── WebRTC helpers ────────────────────────────────────────────────────────
   const createPC = useCallback((peerId, peerName, localStream) => {
     const pc = new RTCPeerConnection(RTC_CONFIG);
     const streamRef = { current: new MediaStream() };
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-    pc.ontrack = (event) => {
-      event.streams[0]?.getTracks().forEach(track => streamRef.current.addTrack(track));
+    pc.ontrack = (ev) => {
+      ev.streams[0]?.getTracks().forEach(t => streamRef.current.addTrack(t));
       setPeers(prev => prev.map(p => p.peerId === peerId ? { ...p, streamRef } : p));
     };
-    pc.onicecandidate = (event) => {
-      if (event.candidate && !isCleanedUp.current)
-        socketRef.current?.emit('ice-candidate', event.candidate, peerId);
-    };
-    pc.oniceconnectionstatechange = () => {
-      if (['failed', 'disconnected', 'closed'].includes(pc.iceConnectionState))
-        console.warn(`[ICE] ${peerId} state: ${pc.iceConnectionState}`);
+    pc.onicecandidate = (ev) => {
+      if (ev.candidate && !isCleanedUp.current)
+        socketRef.current?.emit('ice-candidate', ev.candidate, peerId);
     };
     return { pc, streamRef };
   }, []);
@@ -151,129 +277,110 @@ const Room = () => {
   }, [createPC]);
 
   const removePeer = useCallback((peerId) => {
-    const entry = pcsRef.current.get(peerId);
-    if (entry) {
-      try { entry.pc.close(); } catch (_) {}
-      pcsRef.current.delete(peerId);
-    }
+    const e = pcsRef.current.get(peerId);
+    if (e) { try { e.pc.close(); } catch(_){} pcsRef.current.delete(peerId); }
     setPeers(prev => prev.filter(p => p.peerId !== peerId));
   }, []);
 
-  // ── Main Socket + Media Effect ─────────────────────────────────────────
+  // ── Main Socket + Media effect — ONLY runs after lobby join ──────────────
   useEffect(() => {
-    isCleanedUp.current = false;
+    if (!joined) return;   // ← KEY FIX: camera never starts until user clicks Join
+    isCleanedUp.current   = false;
     meetingStartRef.current = Date.now();
 
-    const socket = io(SOCKET_SERVER, {
-      withCredentials: true,
-      transports: ['websocket', 'polling'],
-    });
+    const socket = io(SOCKET_SERVER, { withCredentials: true, transports: ['websocket','polling'] });
     socketRef.current = socket;
 
     navigator.mediaDevices
       .getUserMedia({ video: initVideo, audio: initAudio })
       .then(async (stream) => {
         if (isCleanedUp.current) { stream.getTracks().forEach(t => t.stop()); return; }
-
         myStreamRef.current = stream;
         if (myVideoRef.current) myVideoRef.current.srcObject = stream;
+        setMicOn(initAudio);
+        setVideoOn(initVideo);
 
         socket.emit('join-room', roomId, socket.id, userName);
 
-        socket.on('user-connected', async (newUserId, newUserName) => {
+        socket.on('user-connected', async (uid, uname) => {
           if (isCleanedUp.current) return;
-          const pc = addPeer(newUserId, newUserName || 'Peer', stream);
+          const pc = addPeer(uid, uname || 'Peer', stream);
           if (!pc) return;
-          try {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            socket.emit('offer', pc.localDescription, newUserId);
-          } catch (err) { console.error('[offer]', err); }
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit('offer', pc.localDescription, uid);
         });
-
-        socket.on('offer', async (incomingOffer, callerSocketId) => {
+        socket.on('offer', async (inOffer, callerId) => {
           if (isCleanedUp.current) return;
-          const pc = addPeer(callerSocketId, 'Peer', stream);
+          const pc = addPeer(callerId, 'Peer', stream);
           if (!pc) return;
-          try {
-            await pc.setRemoteDescription(new RTCSessionDescription(incomingOffer));
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            socket.emit('answer', pc.localDescription, callerSocketId);
-          } catch (err) { console.error('[answer]', err); }
+          await pc.setRemoteDescription(new RTCSessionDescription(inOffer));
+          const ans = await pc.createAnswer();
+          await pc.setLocalDescription(ans);
+          socket.emit('answer', pc.localDescription, callerId);
         });
-
-        socket.on('answer', async (incomingAnswer, peerId) => {
+        socket.on('answer', async (inAns, peerId) => {
           if (isCleanedUp.current) return;
-          const entry = pcsRef.current.get(peerId);
-          if (!entry || entry.pc.remoteDescription) return;
-          try {
-            await entry.pc.setRemoteDescription(new RTCSessionDescription(incomingAnswer));
-          } catch (err) { console.warn('[answer setRemote]', err.message); }
+          const e = pcsRef.current.get(peerId);
+          if (!e || e.pc.remoteDescription) return;
+          await e.pc.setRemoteDescription(new RTCSessionDescription(inAns));
         });
-
-        socket.on('ice-candidate', async (candidate, peerId) => {
+        socket.on('ice-candidate', async (cand, peerId) => {
           if (isCleanedUp.current) return;
-          const entry = pcsRef.current.get(peerId);
-          if (!entry) return;
-          try { await entry.pc.addIceCandidate(new RTCIceCandidate(candidate)); }
-          catch (err) { console.warn('[ice]', err.message); }
+          const e = pcsRef.current.get(peerId);
+          if (e) await e.pc.addIceCandidate(new RTCIceCandidate(cand)).catch(console.warn);
         });
-
-        socket.on('user-disconnected', (userId) => removePeer(userId));
-
-        socket.on('chat-message', (message, senderName, senderId) => {
+        socket.on('user-disconnected', removePeer);
+        socket.on('chat-message', (msg, senderName, senderId) => {
           if (isCleanedUp.current) return;
           setMessages(prev => [...prev, {
             user: senderId === socket.id ? 'You' : senderName,
-            text: message,
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            text: msg,
+            time: new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }),
             mine: senderId === socket.id,
           }]);
         });
       })
       .catch(err => {
-        console.error('getUserMedia error:', err);
         setMediaError(
           err.name === 'NotAllowedError'
-            ? 'Camera/microphone access was denied. Please allow permissions and refresh.'
-            : `Could not access media devices: ${err.message}`
+            ? 'Camera/microphone access denied. Please allow permissions and refresh.'
+            : `Media device error: ${err.message}`
         );
       });
 
     return () => {
       isCleanedUp.current = true;
       myStreamRef.current?.getTracks().forEach(t => t.stop());
-      pcsRef.current.forEach(({ pc }) => { try { pc.close(); } catch (_) {} });
+      pcsRef.current.forEach(({ pc }) => { try { pc.close(); } catch(_){} });
       pcsRef.current.clear();
       socket.disconnect();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId]);
+  }, [joined, roomId]);
 
-  // ── Control Handlers ───────────────────────────────────────────────────
-
+  // ── Controls ──────────────────────────────────────────────────────────────
   const toggleMic = useCallback(() => {
-    const track = myStreamRef.current?.getAudioTracks()[0];
-    if (!track) return;
-    track.enabled = !track.enabled;
-    setMicOn(track.enabled);
-    socketRef.current?.emit('toggle-audio', !track.enabled);
+    const t = myStreamRef.current?.getAudioTracks()[0];
+    if (!t) return;
+    t.enabled = !t.enabled;
+    setMicOn(t.enabled);
+    socketRef.current?.emit('toggle-audio', !t.enabled);
   }, []);
 
   const toggleVideo = useCallback(() => {
-    const track = myStreamRef.current?.getVideoTracks()[0];
-    if (!track) return;
-    track.enabled = !track.enabled;
-    setVideoOn(track.enabled);
-    socketRef.current?.emit('toggle-video', !track.enabled);
+    const t = myStreamRef.current?.getVideoTracks()[0];
+    if (!t) return;
+    t.enabled = !t.enabled;
+    setVideoOn(t.enabled);
+    socketRef.current?.emit('toggle-video', !t.enabled);
   }, []);
 
   const stopScreenShare = useCallback(() => {
-    const camTrack = myStreamRef.current?.getVideoTracks()[0];
+    const cam = myStreamRef.current?.getVideoTracks()[0];
     pcsRef.current.forEach(({ pc }) => {
-      const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-      if (sender && camTrack) sender.replaceTrack(camTrack).catch(console.warn);
+      const s = pc.getSenders().find(s => s.track?.kind === 'video');
+      if (s && cam) s.replaceTrack(cam).catch(console.warn);
     });
     if (myVideoRef.current) myVideoRef.current.srcObject = myStreamRef.current;
     setScreenShare(false);
@@ -282,134 +389,71 @@ const Room = () => {
   const toggleScreenShare = useCallback(async () => {
     if (screenShare) { stopScreenShare(); return; }
     try {
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      const screenTrack  = screenStream.getVideoTracks()[0];
+      const ss    = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      const track = ss.getVideoTracks()[0];
       pcsRef.current.forEach(({ pc }) => {
-        const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-        if (sender) sender.replaceTrack(screenTrack).catch(console.warn);
+        const s = pc.getSenders().find(s => s.track?.kind === 'video');
+        if (s) s.replaceTrack(track).catch(console.warn);
       });
-      if (myVideoRef.current) myVideoRef.current.srcObject = screenStream;
+      if (myVideoRef.current) myVideoRef.current.srcObject = ss;
       setScreenShare(true);
-      screenTrack.addEventListener('ended', stopScreenShare, { once: true });
-    } catch (err) { console.error('Screen share failed:', err); }
+      track.addEventListener('ended', stopScreenShare, { once: true });
+    } catch (e) { console.error('Screen share failed:', e); }
   }, [screenShare, stopScreenShare]);
 
-  // ── 🔴 Recording ─────────────────────────────────────────────────────
   const startRecording = useCallback(() => {
     const stream = myStreamRef.current;
     if (!stream) return;
     setRecordingError('');
-
-    // Pick best supported MIME type
-    const mimeType = [
-      'video/webm;codecs=vp9,opus',
-      'video/webm;codecs=vp8,opus',
-      'video/webm',
-      'video/mp4',
-    ].find(t => MediaRecorder.isTypeSupported(t)) || '';
-
+    const mimeType = ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm','video/mp4']
+      .find(t => MediaRecorder.isTypeSupported(t)) || '';
     try {
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
-      recordedChunksRef.current = [];
-      recordingStartRef.current = Date.now();
-
-      recorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
-      };
-
-      recorder.onstop = async () => {
+      const rec = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+      recordedChunksRef.current  = [];
+      recordingStartRef.current  = Date.now();
+      rec.ondataavailable = (e) => { if (e.data?.size > 0) recordedChunksRef.current.push(e.data); };
+      rec.onstop = async () => {
         setRecordingSaving(true);
-        const durationSecs = Math.floor((Date.now() - recordingStartRef.current) / 1000);
-        const blob         = new Blob(recordedChunksRef.current, { type: mimeType || 'video/webm' });
-        const fileSize     = blob.size;
-
-        // ── Save a local download link AND notify the backend ──
-        // NOTE: In production, upload `blob` to S3/GCS and use the returned URL.
-        // For now we pass a blob:// URL — the backend stores only metadata.
-        const localUrl = URL.createObjectURL(blob);
-
-        // Trigger browser download automatically
-        const a = document.createElement('a');
-        a.href     = localUrl;
-        a.download = `Amigo-${roomId}-${Date.now()}.webm`;
-        a.click();
-
-        // Save metadata to backend
+        const dur  = Math.floor((Date.now() - recordingStartRef.current) / 1000);
+        const blob = new Blob(recordedChunksRef.current, { type: mimeType || 'video/webm' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href = url; a.download = `Amigo-${roomId}-${Date.now()}.webm`; a.click();
         try {
-          await recordingAPI.create({
-            meetingId:  meetingId,
-            title:      `Recording — ${title} (${new Date().toLocaleDateString()})`,
-            duration:   durationSecs,
-            fileSize:   fileSize,
-            fileUrl:    localUrl,     // swap with real CDN URL post-upload
-          });
+          await recordingAPI.create({ meetingId, title: `Recording — ${title}`, duration: dur, fileSize: blob.size, fileUrl: url });
         } catch (err) {
-          console.error('Recording save failed:', err.message);
-          setRecordingError('Recording downloaded but could not be saved to server.');
-        } finally {
-          setRecordingSaving(false);
-          recordedChunksRef.current = [];
-        }
+          setRecordingError('Downloaded but could not save to server.');
+        } finally { setRecordingSaving(false); recordedChunksRef.current = []; }
       };
-
-      recorder.start(1000); // collect a chunk every 1 second
-      mediaRecorderRef.current = recorder;
+      rec.start(1000);
+      mediaRecorderRef.current = rec;
       setIsRecording(true);
-    } catch (err) {
-      setRecordingError(`Recording failed to start: ${err.message}`);
-    }
+    } catch (err) { setRecordingError(`Recording failed: ${err.message}`); }
   }, [roomId, meetingId, title]);
 
   const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current?.state === 'recording') {
-      mediaRecorderRef.current.stop();
-    }
+    if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
     setIsRecording(false);
   }, []);
 
-  const toggleRecording = useCallback(() => {
-    if (isRecording) stopRecording();
-    else             startRecording();
-  }, [isRecording, startRecording, stopRecording]);
-
-  // ── 📵 End / Leave Call ───────────────────────────────────────────────
-  /**
-   * handleEndCall:
-   *   - If the user is the HOST   → calls meetingAPI.end(roomId) to mark it
-   *     as ended in the database, then navigates away.
-   *   - If the user is a GUEST    → skips the API call and just leaves.
-   *   - Also stops any active recording before leaving.
-   */
   const handleEndCall = useCallback(async () => {
-    if (endingCall) return; // prevent double-click
+    if (endingCall) return;
     setEndingCall(true);
-
-    // Stop recording if active
     if (isRecording) stopRecording();
-
-    // Stop local media
     myStreamRef.current?.getTracks().forEach(t => t.stop());
     socketRef.current?.disconnect();
-
-    // Mark meeting as ended in DB (host only, called once per session)
     if (isHost && !hasEndedMeeting.current) {
       hasEndedMeeting.current = true;
-      try {
-        await meetingAPI.end(roomId);
-      } catch (err) {
-        // Non-fatal — meeting may already be ended or network issue
-        console.error('[end-meeting] API call failed:', err.message);
-      }
+      await meetingAPI.end(roomId).catch(console.error);
     }
-
     navigate('/dashboard');
   }, [endingCall, isHost, isRecording, navigate, roomId, stopRecording]);
 
   const handleSendMessage = useCallback((e) => {
     e.preventDefault();
-    const trimmed = newMessage.trim();
-    if (!trimmed) return;
-    socketRef.current?.emit('chat-message', trimmed, userName);
+    const t = newMessage.trim();
+    if (!t) return;
+    socketRef.current?.emit('chat-message', t, userName);
     setNewMessage('');
   }, [newMessage, userName]);
 
@@ -424,11 +468,7 @@ const Room = () => {
   }, []);
 
   const toggleSidePanel = useCallback((tab) => {
-    setSidePanelOpen(prev => {
-      if (prev && activeTab === tab) return false;
-      setActiveTab(tab);
-      return true;
-    });
+    setSidePanelOpen(prev => { if (prev && activeTab === tab) return false; setActiveTab(tab); return true; });
   }, [activeTab]);
 
   const copyRoomId = useCallback(() => {
@@ -437,266 +477,277 @@ const Room = () => {
       .catch(() => prompt('Copy this Room ID:', roomId));
   }, [roomId]);
 
-  // ── Media Error Screen ─────────────────────────────────────────────────
+  // ── PRE-JOIN LOBBY ────────────────────────────────────────────────────────
+  if (!joined) {
+    return (
+      <PreJoinLobby
+        roomId={roomId}
+        title={title}
+        userName={userName}
+        isHost={isHost}
+        meetingId={meetingId}
+        onJoin={handleLobbyJoin}
+        onCancel={handleLobbyCancel}
+      />
+    );
+  }
+
+  // ── MEDIA ERROR ───────────────────────────────────────────────────────────
   if (mediaError) {
     return (
-      <div className="room-container" style={{ alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{
-          color: 'white', textAlign: 'center', padding: '2rem',
-          background: '#1e293b', borderRadius: '12px', maxWidth: '500px',
-        }}>
-          <FaVideoSlash style={{ fontSize: '3rem', color: '#ef4444', marginBottom: '1rem' }} />
-          <h2 style={{ marginBottom: '1rem' }}>Cannot Access Camera / Microphone</h2>
-          <p style={{ color: '#94a3b8', marginBottom: '1.5rem' }}>{mediaError}</p>
-          <button
-            onClick={() => navigate('/dashboard')}
-            style={{
-              background: '#4f46e5', color: 'white', border: 'none',
-              padding: '10px 24px', borderRadius: '8px', cursor: 'pointer',
-            }}
-          >
-            Back to Dashboard
-          </button>
+      <div className="fixed inset-0 bg-slate-900 flex items-center justify-center p-6">
+        <div className="bg-slate-800 rounded-2xl p-8 max-w-md w-full text-center space-y-4">
+          <FaVideoSlash className="text-5xl text-red-500 mx-auto" />
+          <h2 className="text-xl font-bold text-white">Cannot Access Camera / Microphone</h2>
+          <p className="text-slate-400 text-sm">{mediaError}</p>
+          <button onClick={() => navigate('/dashboard')}
+            className="btn-primary w-full py-3">Back to Dashboard</button>
         </div>
       </div>
     );
   }
 
-  // ── Elapsed time display ───────────────────────────────────────────────
-  const elapsedMs   = Date.now() - meetingStartRef.current;
-  const elapsedMins = Math.floor(elapsedMs / 60000);
-  const elapsedSecs = Math.floor((elapsedMs % 60000) / 1000);
-  const elapsedStr  = `${String(elapsedMins).padStart(2,'0')}:${String(elapsedSecs).padStart(2,'0')}`;
-
-  // ── Render ─────────────────────────────────────────────────────────────
+  // ── MAIN ROOM UI ──────────────────────────────────────────────────────────
+  // KEY FIX: use h-[100dvh] instead of 100vh so the room does not overflow
+  // under the browser address bar / tab bar on mobile & desktop.
   return (
-    <div className="room-container">
+    <div className="fixed inset-0 bg-slate-900 flex flex-col overflow-hidden"
+         style={{ height: '100dvh' }}>
 
-      {/* 1. HEADER */}
-      <header className="room-header">
-        <div className="meeting-info">
-          <span className="secure-badge"><FaVideo /> Secure</span>
-          <span className="meeting-title">{title}</span>
-          <span className="timer">
-            {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+      {/* ── HEADER ── */}
+      <header className="flex items-center justify-between px-4 py-2.5
+                         bg-slate-800/80 backdrop-blur border-b border-slate-700/50
+                         flex-shrink-0 z-10">
+        <div className="flex items-center gap-3">
+          <span className="flex items-center gap-1.5 text-xs font-semibold text-sage-400
+                           bg-sage-900/40 px-2.5 py-1 rounded-full">
+            <FaLock className="text-[10px]" /> Secure
           </span>
+          <span className="text-white font-semibold text-sm truncate max-w-[200px]">{title}</span>
         </div>
-        <div className="header-controls">
-          {/* Recording status indicator */}
+        <div className="flex items-center gap-3">
           {isRecording && (
-            <span style={{
-              display: 'flex', alignItems: 'center', gap: '0.4rem',
-              color: '#ef4444', fontSize: '0.8rem', fontWeight: 600,
-              animation: 'pulse 1.5s ease-in-out infinite',
-            }}>
-              <FaCircle style={{ fontSize: '0.6rem' }} /> REC {elapsedStr}
+            <span className="flex items-center gap-1.5 text-xs font-semibold text-red-400 animate-pulse">
+              <FaCircle className="text-[8px]" /> REC {elapsed}
             </span>
           )}
-          {recordingSaving && (
-            <span style={{ color: '#f59e0b', fontSize: '0.8rem' }}>Saving recording...</span>
-          )}
-          {recordingError && (
-            <span style={{ color: '#ef4444', fontSize: '0.75rem' }}>{recordingError}</span>
-          )}
-          <button className="btn-fullscreen" onClick={toggleFullscreen}>
+          {recordingSaving && <span className="text-xs text-yellow-400">Saving…</span>}
+          {recordingError  && <span className="text-xs text-red-400">{recordingError}</span>}
+          <span className="text-slate-400 text-xs">
+            {time.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}
+          </span>
+          <button onClick={toggleFullscreen}
+            className="w-8 h-8 rounded-lg bg-slate-700 text-slate-300 hover:bg-slate-600
+                       flex items-center justify-center text-sm transition-colors">
             {isFullscreen ? <FaCompress /> : <FaExpand />}
           </button>
         </div>
       </header>
 
-      {/* 2. VIDEO GRID */}
-      <main className={`main-stage ${sidePanelOpen ? 'shrink' : ''}`}>
-        <div className="video-grid">
+      {/* ── VIDEO GRID ── */}
+      <main className={`flex-1 overflow-hidden p-3 transition-all duration-300
+                        ${sidePanelOpen ? 'mr-72' : ''}`}>
+        <div className={`h-full grid gap-3 auto-rows-fr
+          ${ (peers.length + 1) === 1 ? 'grid-cols-1'
+           : (peers.length + 1) === 2 ? 'grid-cols-2'
+           : (peers.length + 1) <= 4  ? 'grid-cols-2'
+           : 'grid-cols-3' }`}>
 
           {/* LOCAL TILE */}
-          <div className="video-tile">
-            <video
-              ref={myVideoRef}
-              autoPlay playsInline muted
-              style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '12px' }}
-            />
-            <span className="participant-label">
-              {userName} (You)
-              {!micOn && <FaMicrophoneSlash className="mic-off-icon" />}
-            </span>
+          <div className="relative bg-slate-800 rounded-2xl overflow-hidden flex items-center justify-center">
+            <video ref={myVideoRef} autoPlay playsInline muted
+              className={`w-full h-full object-cover transition-opacity duration-300
+                          ${videoOn ? 'opacity-100' : 'opacity-0'}`} />
             {!videoOn && (
-              <div className="video-placeholder" style={{ position: 'absolute', inset: 0 }}>
-                <div className="avatar-circle">{userName.charAt(0).toUpperCase()}</div>
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <div className="w-14 h-14 rounded-full bg-slate-600 flex items-center justify-center
+                                text-xl font-bold text-white">
+                  {userName.charAt(0).toUpperCase()}
+                </div>
               </div>
             )}
+            <span className="absolute bottom-2 left-3 flex items-center gap-1.5
+                             text-xs text-white/80 bg-black/40 px-2 py-0.5 rounded-full">
+              {userName} (You)
+              {!micOn && <FaMicrophoneSlash className="text-red-400 text-[10px]" />}
+            </span>
           </div>
 
           {/* REMOTE TILES */}
           {peers.map(({ peerId, peerName, streamRef }) => (
-            <RemoteVideo
-              key={peerId}
-              peerId={peerId}
-              peerName={peerName}
-              streamRef={streamRef}
-            />
+            <RemoteVideo key={peerId} peerId={peerId} peerName={peerName} streamRef={streamRef} />
           ))}
-
         </div>
       </main>
 
-      {/* 3. CONTROL DOCK */}
-      <div className="control-dock">
-        <div className="dock-group left">
-          <span style={{ color: '#94a3b8', fontSize: '0.75rem' }}>{elapsedStr}</span>
-          <span style={{ color: '#475569', fontSize: '0.65rem', marginLeft: '4px' }}>elapsed</span>
+      {/* ── CONTROL DOCK ── */}
+      <div className="flex-shrink-0 flex items-center justify-between
+                      px-4 py-3 bg-slate-800/90 backdrop-blur
+                      border-t border-slate-700/50 z-10">
+
+        {/* Left: elapsed */}
+        <div className="hidden sm:flex items-center gap-1 text-slate-400 text-xs min-w-[60px]">
+          <span className="font-mono text-slate-300">{elapsed}</span>
+          <span>elapsed</span>
         </div>
 
-        <div className="dock-group center">
-          <button
-            className={`dock-btn ${!micOn ? 'danger' : ''}`}
-            onClick={toggleMic}
-            title={micOn ? 'Mute' : 'Unmute'}
-          >
-            {micOn ? <FaMicrophone /> : <FaMicrophoneSlash />}
+        {/* Center: media controls */}
+        <div className="flex items-center gap-2 flex-wrap justify-center">
+          {/* Mic */}
+          <button onClick={toggleMic} title={micOn ? 'Mute' : 'Unmute'}
+            className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl
+                        text-xs font-medium transition-all duration-200
+                        ${ !micOn ? 'bg-red-600/90 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}>
+            {micOn ? <FaMicrophone className="text-base" /> : <FaMicrophoneSlash className="text-base" />}
             <span>{micOn ? 'Mute' : 'Unmute'}</span>
           </button>
 
-          <button
-            className={`dock-btn ${!videoOn ? 'danger' : ''}`}
-            onClick={toggleVideo}
-            title={videoOn ? 'Stop Video' : 'Start Video'}
-          >
-            {videoOn ? <FaVideo /> : <FaVideoSlash />}
+          {/* Camera */}
+          <button onClick={toggleVideo} title={videoOn ? 'Stop Video' : 'Start Video'}
+            className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl
+                        text-xs font-medium transition-all duration-200
+                        ${ !videoOn ? 'bg-red-600/90 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}>
+            {videoOn ? <FaVideo className="text-base" /> : <FaVideoSlash className="text-base" />}
             <span>{videoOn ? 'Stop Video' : 'Start Video'}</span>
           </button>
 
-          <button
-            className={`dock-btn ${screenShare ? 'active' : ''}`}
-            onClick={toggleScreenShare}
-            title={screenShare ? 'Stop Share' : 'Share Screen'}
-          >
-            <FaDesktop />
+          {/* Screen share */}
+          <button onClick={toggleScreenShare}
+            className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl
+                        text-xs font-medium transition-all duration-200
+                        ${ screenShare ? 'bg-sage-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}>
+            <FaDesktop className="text-base" />
             <span>{screenShare ? 'Stop Share' : 'Share'}</span>
           </button>
 
-          {/* 🔴 Record Button */}
-          <button
-            className={`dock-btn ${isRecording ? 'danger' : ''}`}
-            onClick={toggleRecording}
-            disabled={recordingSaving}
-            title={isRecording ? 'Stop Recording' : 'Start Recording'}
-            style={isRecording ? { animation: 'pulse 1.5s ease-in-out infinite' } : {}}
-          >
-            {isRecording ? <FaStop /> : <FaCircle style={{ color: '#ef4444' }} />}
+          {/* Record */}
+          <button onClick={isRecording ? stopRecording : startRecording} disabled={recordingSaving}
+            className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl
+                        text-xs font-medium transition-all duration-200
+                        ${ isRecording ? 'bg-red-600/90 text-white animate-pulse' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}>
+            {isRecording ? <FaStop className="text-base" /> : <FaCircle className="text-base text-red-400" />}
             <span>{isRecording ? 'Stop Rec' : 'Record'}</span>
           </button>
 
-          <button
-            className={`dock-btn ${sidePanelOpen && activeTab === 'participants' ? 'active' : ''}`}
-            onClick={() => toggleSidePanel('participants')}
-            title="Participants"
-          >
-            <FaUserFriends />
+          {/* Participants */}
+          <button onClick={() => toggleSidePanel('participants')}
+            className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl
+                        text-xs font-medium transition-all duration-200 relative
+                        ${ sidePanelOpen && activeTab==='participants' ? 'bg-mint-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}>
+            <FaUserFriends className="text-base" />
             <span>People</span>
-            <span className="badge-count">{peers.length + 1}</span>
+            <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-mint-500
+                             text-white text-[9px] font-bold flex items-center justify-center">
+              {peers.length + 1}
+            </span>
           </button>
 
-          <button
-            className={`dock-btn ${sidePanelOpen && activeTab === 'chat' ? 'active' : ''}`}
-            onClick={() => toggleSidePanel('chat')}
-            title="Chat"
-          >
-            <FaComments />
+          {/* Chat */}
+          <button onClick={() => toggleSidePanel('chat')}
+            className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl
+                        text-xs font-medium transition-all duration-200
+                        ${ sidePanelOpen && activeTab==='chat' ? 'bg-mint-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}>
+            <FaComments className="text-base" />
             <span>Chat</span>
           </button>
         </div>
 
-        {/* End / Leave button */}
-        <div className="dock-group right">
-          <button
-            className="dock-btn end-call"
-            onClick={handleEndCall}
-            disabled={endingCall}
-            title={isHost ? 'End Meeting for All' : 'Leave Meeting'}
-          >
-            <FaPhoneSlash />
-            <span>{endingCall ? 'Ending...' : isHost ? 'End' : 'Leave'}</span>
+        {/* Right: End / Leave */}
+        <div className="min-w-[60px] flex justify-end">
+          <button onClick={handleEndCall} disabled={endingCall}
+            className="flex flex-col items-center gap-0.5 px-4 py-2 rounded-xl
+                       text-xs font-bold bg-red-600 text-white hover:bg-red-700
+                       disabled:opacity-60 transition-all duration-200">
+            <FaPhoneSlash className="text-base" />
+            <span>{endingCall ? 'Ending…' : isHost ? 'End' : 'Leave'}</span>
           </button>
         </div>
       </div>
 
-      {/* 4. SIDE PANEL */}
-      <aside className={`side-panel ${sidePanelOpen ? 'open' : ''}`}>
-        <div className="panel-header">
-          <h3>
-            {activeTab === 'chat'
-              ? 'Meeting Chat'
-              : `Participants (${peers.length + 1})`}
+      {/* ── SIDE PANEL ── */}
+      <aside className={`fixed top-0 right-0 h-full w-72 bg-slate-800 border-l border-slate-700
+                         flex flex-col transition-transform duration-300 z-20
+                         ${ sidePanelOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+        <div className="flex items-center justify-between px-4 py-3
+                        border-b border-slate-700 flex-shrink-0">
+          <h3 className="text-sm font-semibold text-white">
+            {activeTab === 'chat' ? 'Meeting Chat' : `Participants (${peers.length + 1})`}
           </h3>
-          <button className="btn-close-panel" onClick={() => setSidePanelOpen(false)}>
-            <FaChevronRight />
+          <button onClick={() => setSidePanelOpen(false)}
+            className="w-7 h-7 rounded-lg bg-slate-700 text-slate-400 hover:bg-slate-600
+                       flex items-center justify-center transition-colors">
+            <FaChevronRight className="text-xs" />
           </button>
         </div>
 
+        {/* Chat tab */}
         {activeTab === 'chat' && (
-          <div className="panel-content chat-mode">
-            <div className="chat-messages">
+          <div className="flex flex-col flex-1 overflow-hidden">
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
               {messages.length === 0 && (
-                <p style={{ color: '#475569', textAlign: 'center', marginTop: '2rem', fontSize: '0.85rem' }}>
-                  No messages yet. Say hello! 👋
-                </p>
+                <p className="text-center text-slate-500 text-xs mt-8">No messages yet. Say hello! 👋</p>
               )}
-              {messages.map((msg, idx) => (
-                <div key={idx} className={`chat-bubble ${msg.mine ? 'mine' : 'theirs'}`}>
-                  <div className="bubble-meta">
-                    <span className="sender">{msg.user}</span>
-                    <span className="time">{msg.time}</span>
+              {messages.map((m, i) => (
+                <div key={i} className={`flex flex-col ${ m.mine ? 'items-end' : 'items-start'}`}>
+                  <span className="text-[10px] text-slate-500 mb-0.5">{m.user} · {m.time}</span>
+                  <div className={`text-sm px-3 py-2 rounded-xl max-w-[85%] leading-snug
+                    ${ m.mine ? 'bg-sage-600 text-white' : 'bg-slate-700 text-slate-200'}`}>
+                    {m.text}
                   </div>
-                  <div className="bubble-text">{msg.text}</div>
                 </div>
               ))}
               <div ref={chatBottomRef} />
             </div>
-            <form className="chat-input-area" onSubmit={handleSendMessage}>
-              <input
-                type="text"
-                placeholder="Type a message..."
-                value={newMessage}
+            <form onSubmit={handleSendMessage}
+              className="flex gap-2 p-3 border-t border-slate-700 flex-shrink-0">
+              <input type="text" placeholder="Type a message…" value={newMessage}
                 onChange={e => setNewMessage(e.target.value)}
-              />
-              <button type="submit" className="btn-send"><FaPaperPlane /></button>
+                className="flex-1 bg-slate-700 border border-slate-600 rounded-xl
+                           px-3 py-2 text-sm text-white placeholder-slate-500
+                           focus:outline-none focus:ring-2 focus:ring-sage-500" />
+              <button type="submit"
+                className="w-9 h-9 rounded-xl bg-sage-600 text-white hover:bg-sage-700
+                           flex items-center justify-center flex-shrink-0 transition-colors">
+                <FaPaperPlane className="text-xs" />
+              </button>
             </form>
           </div>
         )}
 
+        {/* Participants tab */}
         {activeTab === 'participants' && (
-          <div className="panel-content people-mode">
-            <div className="person-row">
-              <div className="person-info">
-                <div className="person-avatar">{userName.charAt(0).toUpperCase()}</div>
-                <span className="person-name">
-                  {userName} (You)
-                  {isHost && (
-                    <span style={{
-                      marginLeft: '6px', fontSize: '0.65rem', background: '#4f46e5',
-                      color: '#fff', padding: '1px 6px', borderRadius: '99px',
-                    }}>HOST</span>
-                  )}
-                </span>
-              </div>
-              <div className="person-status">
-                {videoOn ? <FaVideo className="icon-on" /> : <FaVideoSlash className="icon-off" />}
-                {micOn   ? <FaMicrophone className="icon-on" /> : <FaMicrophoneSlash className="icon-off" />}
-              </div>
-            </div>
-
-            {peers.map(({ peerId, peerName }) => (
-              <div key={peerId} className="person-row">
-                <div className="person-info">
-                  <div className="person-avatar">{(peerName || 'P').charAt(0).toUpperCase()}</div>
-                  <span className="person-name">{peerName || 'Peer'}</span>
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+            {/* Self */}
+            <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-700/50">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-full bg-sage-600 flex items-center justify-center
+                                text-sm font-bold text-white">
+                  {userName.charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-white">{userName} (You)</p>
+                  {isHost && <span className="text-[10px] bg-sage-600 text-white px-1.5 py-0.5 rounded-full">HOST</span>}
                 </div>
               </div>
-            ))}
-
-            <div className="invite-section">
-              <button className="btn-invite-link" onClick={copyRoomId}>Copy Room ID</button>
+              <div className="flex gap-1.5 text-xs">
+                {videoOn ? <FaVideo className="text-sage-400" /> : <FaVideoSlash className="text-red-400" />}
+                {micOn   ? <FaMicrophone className="text-sage-400" /> : <FaMicrophoneSlash className="text-red-400" />}
+              </div>
             </div>
+            {peers.map(({ peerId, peerName }) => (
+              <div key={peerId} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-700/30">
+                <div className="w-8 h-8 rounded-full bg-mint-600 flex items-center justify-center
+                                text-sm font-bold text-white">
+                  {(peerName||'P').charAt(0).toUpperCase()}
+                </div>
+                <p className="text-sm text-slate-200">{peerName || 'Peer'}</p>
+              </div>
+            ))}
+            <button onClick={copyRoomId}
+              className="w-full mt-4 py-2.5 rounded-xl bg-slate-700 text-slate-300 text-sm
+                         font-semibold hover:bg-slate-600 transition-colors">
+              Copy Room ID
+            </button>
           </div>
         )}
       </aside>

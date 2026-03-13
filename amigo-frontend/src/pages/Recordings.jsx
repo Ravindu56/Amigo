@@ -1,174 +1,143 @@
+/**
+ * Recordings.jsx — Tailwind rebuild, Recordings.css purged
+ */
 import React, { useState, useEffect } from 'react';
 import Header from '../components/Header';
-import {
-  FaPlay, FaDownload, FaTrash, FaSearch,
-  FaCalendarAlt, FaClock, FaSpinner, FaFilm,
-} from 'react-icons/fa';
-import './styles/Recordings.css';
+import Footer from '../components/Footer';
+import { FaPlay, FaDownload, FaFilm, FaClock, FaCalendarAlt, FaSearch, FaTrash } from 'react-icons/fa';
 import { recordingAPI } from '../services/api';
 
-// Convert seconds to MM:SS or HH:MM:SS
-const formatDuration = (secs) => {
-  if (!secs || secs === 0) return '00:00';
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = secs % 60;
-  if (h > 0) return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-  return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+const fmtSize = (bytes) => {
+  if (!bytes) return '—';
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024*1024)).toFixed(1)} MB`;
 };
 
-// Convert bytes to human-readable size
-const formatSize = (bytes) => {
-  if (!bytes || bytes === 0) return '—';
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+const fmtDur = (secs) => {
+  if (!secs) return '—';
+  const m = Math.floor(secs/60), s = secs % 60;
+  return `${m}:${String(s).padStart(2,'0')}`;
 };
-
-// Generate a gradient for the thumbnail based on the recording id
-const GRADIENTS = [
-  'linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%)',
-  'linear-gradient(135deg, #ec4899 0%, #8b5cf6 100%)',
-  'linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)',
-  'linear-gradient(135deg, #10b981 0%, #3b82f6 100%)',
-  'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
-];
-const getGradient = (id) => GRADIENTS[id % GRADIENTS.length];
 
 const Recordings = () => {
   const [recordings, setRecordings] = useState([]);
   const [loading,    setLoading]    = useState(true);
-  const [error,      setError]      = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
+  const [search,     setSearch]     = useState('');
 
   useEffect(() => {
-    const load = async () => {
-      try {
-        const data = await recordingAPI.getMy();
-        setRecordings(data);
-      } catch (err) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
+    recordingAPI.getAll()
+      .then(setRecordings)
+      .catch(console.error)
+      .finally(() => setLoading(false));
   }, []);
 
+  const filtered = recordings.filter(r =>
+    r.title?.toLowerCase().includes(search.toLowerCase())
+  );
+
   const handleDelete = async (id) => {
-    if (!window.confirm('Delete this recording permanently?')) return;
+    if (!confirm('Delete this recording?')) return;
     try {
       await recordingAPI.delete(id);
       setRecordings(prev => prev.filter(r => r.id !== id));
-    } catch (err) {
-      alert(err.message);
-    }
+    } catch (err) { alert(err.message); }
   };
-
-  const handleDownload = (rec) => {
-    if (!rec.fileUrl) { alert('No file available to download.'); return; }
-    window.open(rec.fileUrl, '_blank');
-  };
-
-  const filtered = recordings.filter(r =>
-    r.title.toLowerCase().includes(searchQuery.toLowerCase())
-  );
 
   return (
-    <div className="recordings-wrapper">
+    <div className="page-wrapper">
       <Header />
-      <div className="recordings-container">
-
-        {/* Header */}
-        <div className="page-header">
-          <div className="header-title">
-            <h2>Meeting Recordings</h2>
-            <p>Access and manage your recorded video sessions.</p>
+      <main className="flex-1 page-container py-8">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+          <div>
+            <h1 className="page-title">Recordings</h1>
+            <p className="page-desc">{recordings.length} saved recording{recordings.length !== 1 ? 's' : ''}</p>
           </div>
-          <div className="search-box">
-            <FaSearch className="search-icon" />
-            <input
-              type="text"
-              placeholder="Search recordings..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
+          <div className="input-group max-w-xs w-full">
+            <FaSearch className="input-icon" />
+            <input type="text" placeholder="Search recordings…"
+              value={search} onChange={e => setSearch(e.target.value)}
+              className="input-with-icon" />
           </div>
         </div>
 
-        {/* Loading */}
-        {loading && (
-          <div style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>
-            <FaSpinner style={{ fontSize: '1.5rem', animation: 'spin 1s linear infinite' }} />
-            <p style={{ marginTop: '0.5rem' }}>Loading recordings...</p>
+        {loading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {[1,2,3].map(i => (
+              <div key={i} className="card animate-pulse space-y-3">
+                <div className="aspect-video bg-beige-200 rounded-xl" />
+                <div className="h-3.5 bg-beige-200 rounded w-2/3" />
+                <div className="h-3 bg-beige-200 rounded w-1/3" />
+              </div>
+            ))}
           </div>
-        )}
-
-        {/* Error */}
-        {!loading && error && (
-          <p style={{ color: '#ef4444', padding: '2rem' }}>{error}</p>
-        )}
-
-        {/* Empty */}
-        {!loading && !error && recordings.length === 0 && (
-          <div style={{ textAlign: 'center', padding: '4rem', color: '#64748b' }}>
-            <FaFilm style={{ fontSize: '2.5rem', marginBottom: '1rem', opacity: 0.3 }} />
-            <h3>No recordings yet</h3>
-            <p>Recordings from your meetings will appear here.</p>
+        ) : filtered.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-icon"><FaFilm /></div>
+            <p className="text-sm font-semibold text-charcoal-700">
+              {search ? 'No recordings match your search' : 'No recordings yet'}
+            </p>
+            <p className="text-xs text-charcoal-500 mt-1">
+              Recordings from your meetings will appear here.
+            </p>
           </div>
-        )}
-
-        {/* Video Grid */}
-        {!loading && !error && recordings.length > 0 && (
-          <div className="video-grid">
-            {filtered.length > 0 ? (
-              filtered.map((rec) => (
-                <div key={rec.id} className="video-card">
-                  <div className="thumbnail" style={{ background: getGradient(rec.id) }}>
-                    <div className="play-overlay">
-                      <button className="btn-play"
-                        onClick={() => rec.fileUrl && window.open(rec.fileUrl, '_blank')}>
-                        <FaPlay />
-                      </button>
-                    </div>
-                    <span className="duration-badge">{formatDuration(rec.duration)}</span>
-                  </div>
-                  <div className="card-content">
-                    <div className="card-info">
-                      <h3>{rec.title}</h3>
-                      <div className="meta-tags">
-                        <span>
-                          <FaCalendarAlt />{' '}
-                          {new Date(rec.createdAt).toLocaleDateString('en-US', {
-                            month: 'short', day: 'numeric', year: 'numeric',
-                          })}
-                        </span>
-                        <span><FaClock /> {formatSize(rec.fileSize)}</span>
-                      </div>
-                    </div>
-                    <div className="card-actions">
-                      <button className="action-btn download" title="Download"
-                        onClick={() => handleDownload(rec)}>
-                        <FaDownload /> Download
-                      </button>
-                      <div className="right-actions">
-                        <button className="icon-action delete" title="Delete"
-                          onClick={() => handleDelete(rec.id)}>
-                          <FaTrash />
-                        </button>
-                      </div>
-                    </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filtered.map(r => (
+              <div key={r.id} className="card group space-y-3">
+                {/* Thumbnail */}
+                <div className="relative aspect-video bg-slate-900 rounded-xl overflow-hidden
+                                flex items-center justify-center">
+                  <FaFilm className="text-3xl text-slate-600" />
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100
+                                  transition-opacity duration-200 flex items-center justify-center gap-3">
+                    {r.fileUrl && (
+                      <a href={r.fileUrl} target="_blank" rel="noopener noreferrer"
+                        className="w-10 h-10 rounded-full bg-white/20 text-white
+                                   flex items-center justify-center hover:bg-white/30 transition-colors">
+                        <FaPlay className="text-sm" />
+                      </a>
+                    )}
+                    {r.fileUrl && (
+                      <a href={r.fileUrl} download
+                        className="w-10 h-10 rounded-full bg-white/20 text-white
+                                   flex items-center justify-center hover:bg-white/30 transition-colors">
+                        <FaDownload className="text-sm" />
+                      </a>
+                    )}
                   </div>
                 </div>
-              ))
-            ) : (
-              <div className="no-results">
-                <p>No recordings found matching "{searchQuery}"</p>
+
+                <div>
+                  <p className="text-sm font-semibold text-charcoal-800 truncate">{r.title}</p>
+                  <div className="flex items-center gap-3 mt-1 flex-wrap">
+                    <span className="flex items-center gap-1 text-xs text-charcoal-500">
+                      <FaClock /> {fmtDur(r.duration)}
+                    </span>
+                    <span className="flex items-center gap-1 text-xs text-charcoal-500">
+                      <FaCalendarAlt /> {r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '—'}
+                    </span>
+                    <span className="text-xs text-charcoal-400">{fmtSize(r.fileSize)}</span>
+                  </div>
+                </div>
+
+                <div className="flex gap-2 pt-1">
+                  {r.fileUrl && (
+                    <a href={r.fileUrl} download
+                      className="btn-secondary flex-1 text-xs justify-center py-2">
+                      <FaDownload /> Download
+                    </a>
+                  )}
+                  <button onClick={() => handleDelete(r.id)}
+                    className="btn-ghost text-red-500 hover:bg-red-50 text-xs px-3 py-2">
+                    <FaTrash />
+                  </button>
+                </div>
               </div>
-            )}
+            ))}
           </div>
         )}
-      </div>
+      </main>
+      <Footer />
     </div>
   );
 };
