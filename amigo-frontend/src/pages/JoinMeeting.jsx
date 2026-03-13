@@ -1,52 +1,82 @@
 import React, { useState } from 'react';
 import Header from '../components/Header';
 import { useNavigate } from 'react-router-dom';
-import { FaKeyboard, FaUser, FaMicrophone, FaMicrophoneSlash, FaVideo, FaVideoSlash, FaArrowRight } from 'react-icons/fa';
+import {
+  FaKeyboard, FaUser, FaMicrophone, FaMicrophoneSlash,
+  FaVideo, FaVideoSlash, FaArrowRight, FaLock,
+} from 'react-icons/fa';
+import { useAuth } from '../context/AuthContext';
+import { meetingAPI } from '../services/api';
 import './styles/JoinMeeting.css';
 
 const JoinMeeting = () => {
-  const navigate = useNavigate();
+  const navigate  = useNavigate();
+  const { user }  = useAuth();
 
   const [formData, setFormData] = useState({
     meetingId: '',
-    username: 'Alex Sterling',
+    passcode:  '',
+    username:  user?.fullName || '',
   });
 
-  const [settings, setSettings] = useState({
-    audio: true,
-    video: true
-  });
+  const [settings, setSettings] = useState({ audio: true, video: true });
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState('');
 
-  const handleChange = (e) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
-  };
+  const handleChange   = (e) => setFormData(p => ({ ...p, [e.target.name]: e.target.value }));
+  const toggleSetting  = (key) => setSettings(p => ({ ...p, [key]: !p[key] }));
 
-  const toggleSetting = (setting) => {
-    setSettings({ ...settings, [setting]: !settings[setting] });
-  };
-
-  const handleJoin = (e) => {
+  const handleJoin = async (e) => {
     e.preventDefault();
-    // Strip whitespace and dashes so "844-922-101" and "844922101" both work
+    setError('');
+
+    // Normalise: strip spaces/dashes so "844-922-101" and "844922101" both work
     const roomId = formData.meetingId.replace(/[\s-]+/g, '');
-    if (!roomId) return;
-    // Navigate to the dynamic room route, passing user preferences via state
-    navigate(`/room/${roomId}`, {
-      state: {
-        userName: formData.username,
-        audio: settings.audio,
-        video: settings.video
+    const formatted = `${roomId.slice(0,3)}-${roomId.slice(3,6)}-${roomId.slice(6,9)}`;
+
+    if (roomId.length !== 9) {
+      setError('Please enter a valid 9-digit meeting ID.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // Validate the room exists on the backend
+      const meeting = await meetingAPI.getByRoomId(formatted);
+
+      // If meeting has a passcode, verify it
+      if (meeting.passcode && meeting.passcode !== formData.passcode) {
+        setError('Incorrect passcode. Please try again.');
+        setLoading(false);
+        return;
       }
-    });
+
+      // All good — enter the room
+      navigate(`/room/${formatted}`, {
+        state: {
+          meetingId: meeting.id,
+          title:     meeting.title,
+          userName:  formData.username,
+          isHost:    false,
+          audio:     settings.audio,
+          video:     settings.video,
+        },
+      });
+    } catch (err) {
+      setError(err.message === 'Meeting not found'
+        ? 'No meeting found with that ID. Please check and try again.'
+        : err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div className="join-wrapper">
       <Header />
-
       <div className="join-container">
 
-        {/* --- LEFT: Input Section --- */}
+        {/* LEFT: Form */}
         <div className="join-form-panel">
           <div className="panel-header">
             <div className="icon-badge blue"><FaKeyboard /></div>
@@ -56,7 +86,7 @@ const JoinMeeting = () => {
 
           <form onSubmit={handleJoin}>
 
-            {/* Meeting ID Input */}
+            {/* Meeting ID */}
             <div className="form-group large-input">
               <label>Meeting ID or Personal Link Name</label>
               <div className="input-icon-wrapper">
@@ -72,7 +102,22 @@ const JoinMeeting = () => {
               </div>
             </div>
 
-            {/* Name Input */}
+            {/* Passcode */}
+            <div className="form-group">
+              <label>Passcode (if required)</label>
+              <div className="input-icon-wrapper">
+                <FaLock className="field-icon" />
+                <input
+                  type="password"
+                  name="passcode"
+                  value={formData.passcode}
+                  onChange={handleChange}
+                  placeholder="Enter passcode"
+                />
+              </div>
+            </div>
+
+            {/* Display Name */}
             <div className="form-group">
               <label>Your Display Name</label>
               <div className="input-icon-wrapper">
@@ -98,11 +143,8 @@ const JoinMeeting = () => {
                   <span className="toggle-desc">Join without microphone audio</span>
                 </div>
                 <label className="switch">
-                  <input
-                    type="checkbox"
-                    checked={!settings.audio}
-                    onChange={() => toggleSetting('audio')}
-                  />
+                  <input type="checkbox" checked={!settings.audio}
+                    onChange={() => toggleSetting('audio')} />
                   <span className="slider round"></span>
                 </label>
               </div>
@@ -113,33 +155,40 @@ const JoinMeeting = () => {
                   <span className="toggle-desc">Join with camera off</span>
                 </div>
                 <label className="switch">
-                  <input
-                    type="checkbox"
-                    checked={!settings.video}
-                    onChange={() => toggleSetting('video')}
-                  />
+                  <input type="checkbox" checked={!settings.video}
+                    onChange={() => toggleSetting('video')} />
                   <span className="slider round"></span>
                 </label>
               </div>
             </div>
 
+            {error && (
+              <div style={{
+                background: '#fef2f2', border: '1px solid #fca5a5',
+                borderRadius: '8px', padding: '0.75rem 1rem',
+                color: '#dc2626', fontSize: '0.875rem', marginBottom: '1rem',
+              }}>
+                {error}
+              </div>
+            )}
+
             <div className="form-actions">
-              <button type="button" className="btn-cancel" onClick={() => navigate('/dashboard')}>Cancel</button>
+              <button type="button" className="btn-cancel"
+                onClick={() => navigate('/dashboard')}>Cancel</button>
               <button
                 type="submit"
                 className={`btn-join ${formData.meetingId ? 'active' : ''}`}
-                disabled={!formData.meetingId}
+                disabled={!formData.meetingId || loading}
               >
-                Join Meeting <FaArrowRight />
+                {loading ? 'Checking...' : <> Join Meeting <FaArrowRight /> </>}
               </button>
             </div>
           </form>
         </div>
 
-        {/* --- RIGHT: Tech Check Preview --- */}
+        {/* RIGHT: Tech Check */}
         <div className="tech-check-panel">
           <div className="preview-label">PRE-FLIGHT CHECK</div>
-
           <div className="camera-card">
             <div className={`video-screen ${!settings.video ? 'video-off' : ''}`}>
               {settings.video ? (
@@ -153,10 +202,9 @@ const JoinMeeting = () => {
                 </div>
               ) : (
                 <div className="avatar-placeholder">
-                  {formData.username.charAt(0)}
+                  {formData.username.charAt(0) || 'U'}
                 </div>
               )}
-
               <div className="status-badges">
                 <span className={`badge ${settings.audio ? 'on' : 'off'}`}>
                   {settings.audio ? <FaMicrophone /> : <FaMicrophoneSlash />}
@@ -166,7 +214,6 @@ const JoinMeeting = () => {
                 </span>
               </div>
             </div>
-
             <div className="camera-footer">
               <p>{settings.video ? 'Camera is Ready' : 'Camera is Off'}</p>
               <button className="btn-test-device">Test Speaker and Microphone</button>

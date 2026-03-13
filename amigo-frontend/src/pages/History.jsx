@@ -1,113 +1,126 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Header from '../components/Header';
-import { FaCalendarAlt, FaClock, FaUserFriends, FaPhoneSlash, FaCheckCircle, FaBan, FaTrashAlt } from 'react-icons/fa';
+import {
+  FaCalendarAlt, FaClock, FaUserFriends,
+  FaCheckCircle, FaSpinner,
+} from 'react-icons/fa';
 import './styles/History.css';
+import { meetingAPI } from '../services/api';
+
+// Convert seconds to a human-readable duration string
+const formatDuration = (startedAt, endedAt) => {
+  if (!startedAt || !endedAt) return '—';
+  const secs = Math.floor((new Date(endedAt) - new Date(startedAt)) / 1000);
+  if (secs < 60) return `${secs} sec`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins} min`;
+  const hrs  = Math.floor(mins / 60);
+  const rem  = mins % 60;
+  return rem > 0 ? `${hrs} hr ${rem} min` : `${hrs} hr`;
+};
+
+const formatDate = (isoDate) => {
+  if (!isoDate) return '—';
+  return new Date(isoDate).toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+};
 
 const History = () => {
-  // --- Mock Data ---
-  const historyData = [
-    {
-      id: 1,
-      topic: "Amigo Project Sync",
-      date: "Today, 10:00 AM",
-      duration: "55 mins",
-      participants: 4,
-      status: "completed", // completed, missed, cancelled
-      host: "You"
-    },
-    {
-      id: 2,
-      topic: "Client Intro: Aurelia Travel",
-      date: "Yesterday, 2:00 PM",
-      duration: "0 mins",
-      participants: 1,
-      status: "missed",
-      host: "Client"
-    },
-    {
-      id: 3,
-      topic: "Q4 Marketing Review",
-      date: "Jan 05, 2026",
-      duration: "1 hr 12 mins",
-      participants: 8,
-      status: "completed",
-      host: "Sarah (CMO)"
-    },
-    {
-      id: 4,
-      topic: "Quick Catch-up",
-      date: "Jan 02, 2026",
-      duration: "-",
-      participants: 2,
-      status: "cancelled",
-      host: "You"
-    }
-  ];
+  const [historyData, setHistoryData] = useState([]);
+  const [loading,     setLoading]     = useState(true);
+  const [error,       setError]       = useState('');
 
-  const getStatusIcon = (status) => {
-    switch(status) {
-      case 'completed': return <FaCheckCircle className="status-icon success" />;
-      case 'missed': return <FaPhoneSlash className="status-icon danger" />;
-      case 'cancelled': return <FaBan className="status-icon warning" />;
-      default: return <FaCheckCircle />;
-    }
-  };
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const data = await meetingAPI.getHistory();
+        setHistoryData(data);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, []);
 
   return (
     <div className="history-wrapper">
       <Header />
-
       <div className="history-container">
+
         {/* Page Header */}
         <div className="history-header">
           <div className="header-content">
             <h2>Meeting History</h2>
             <p>A log of all your past calls and sessions.</p>
           </div>
-          <button className="btn-clear-history">
-            <FaTrashAlt /> Clear All
-          </button>
         </div>
+
+        {/* Loading */}
+        {loading && (
+          <div style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>
+            <FaSpinner style={{ fontSize: '1.5rem', animation: 'spin 1s linear infinite' }} />
+            <p style={{ marginTop: '0.5rem' }}>Loading history...</p>
+          </div>
+        )}
+
+        {/* Error */}
+        {!loading && error && (
+          <p style={{ color: '#ef4444', padding: '2rem' }}>{error}</p>
+        )}
+
+        {/* Empty State */}
+        {!loading && !error && historyData.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '4rem', color: '#64748b' }}>
+            <FaCalendarAlt style={{ fontSize: '2.5rem', marginBottom: '1rem', opacity: 0.3 }} />
+            <h3>No meeting history yet</h3>
+            <p>Your completed meetings will appear here.</p>
+          </div>
+        )}
 
         {/* History List */}
-        <div className="history-list">
-          {historyData.map((item) => (
-            <div key={item.id} className="history-item">
-              
-              {/* Left: Icon & Topic */}
-              <div className="history-main">
-                <div className={`icon-box ${item.status}`}>
-                  {getStatusIcon(item.status)}
+        {!loading && !error && historyData.length > 0 && (
+          <div className="history-list">
+            {historyData.map((item) => (
+              <div key={item.id} className="history-item">
+
+                {/* Left: Icon & Topic */}
+                <div className="history-main">
+                  <div className="icon-box completed">
+                    <FaCheckCircle className="status-icon success" />
+                  </div>
+                  <div className="info-text">
+                    <h3>{item.title}</h3>
+                    <span className="host-label">
+                      ID: {item.roomId}
+                    </span>
+                  </div>
                 </div>
-                <div className="info-text">
-                  <h3>{item.topic}</h3>
-                  <span className="host-label">Hosted by {item.host}</span>
+
+                {/* Middle: Meta */}
+                <div className="history-meta">
+                  <div className="meta-group">
+                    <FaCalendarAlt /> {formatDate(item.endedAt)}
+                  </div>
+                  <div className="meta-group">
+                    <FaClock /> {formatDuration(item.startedAt, item.endedAt)}
+                  </div>
+                  <div className="meta-group">
+                    <FaUserFriends /> {item.duration} min scheduled
+                  </div>
+                </div>
+
+                {/* Right: Status */}
+                <div className="history-status">
+                  <span className="status-badge completed">Completed</span>
                 </div>
               </div>
-
-              {/* Middle: Meta Details */}
-              <div className="history-meta">
-                <div className="meta-group">
-                  <FaCalendarAlt /> {item.date}
-                </div>
-                <div className="meta-group">
-                  <FaClock /> {item.duration}
-                </div>
-                <div className="meta-group">
-                  <FaUserFriends /> {item.participants} People
-                </div>
-              </div>
-
-              {/* Right: Status Badge */}
-              <div className="history-status">
-                <span className={`status-badge ${item.status}`}>
-                  {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
-                </span>
-              </div>
-
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
