@@ -1,23 +1,24 @@
+/**
+ * AuthPage.jsx
+ *
+ * FIX: Added redirect guard — if the user is already logged in and visits
+ * /auth, they are immediately sent to /dashboard instead of seeing the
+ * login form again.
+ */
 import React from 'react';
-import AuthForm from '../components/AuthForm';
-import Footer from '../components/Footer';
-import './styles/AuthPage.css'; 
+import { Navigate } from 'react-router-dom';
+import AuthForm     from '../components/AuthForm';
+import { useAuth } from '../context/AuthContext';
 
 const AuthPage = () => {
-  return (
-    <div className="auth-page-container">
-      {/* Background decoration */}
-      <div className="auth-blob"></div>
-      
-      {/* Wrapper to center the form */}
-      <div className="auth-content-wrapper">
-        <AuthForm />
-      </div>
+  const { user, loading } = useAuth();
 
-      {/* Footer stays at the bottom */}
-      <Footer />
-    </div>
-  );
+  // Already authenticated — send to dashboard
+  if (!loading && user) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return <AuthForm />;
 };
 
 export default AuthPage;
