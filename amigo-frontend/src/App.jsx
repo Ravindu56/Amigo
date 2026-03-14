@@ -1,11 +1,9 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 
-// Auth
 import { AuthProvider } from './context/AuthContext';
-import ProtectedRoute from './components/ProtectedRoute';
+import ProtectedRoute  from './components/ProtectedRoute';
 
-// Pages
 import WelcomePage     from './pages/WelcomePage';
 import AuthPage        from './pages/AuthPage';
 import Dashboard       from './pages/Dashboard.jsx';
@@ -23,27 +21,28 @@ import './index.css';
 function App() {
   return (
     <Router>
-      {/* AuthProvider must be INSIDE Router so it can call useNavigate */}
+      {/* AuthProvider INSIDE Router so it can call useNavigate */}
       <AuthProvider>
-        <div className="app-main">
-          <Routes>
-            {/* ── Public routes ── */}
-            <Route path="/"    element={<WelcomePage />} />
-            <Route path="/auth" element={<AuthPage />} />
+        <Routes>
+          {/* ── Public ── */}
+          <Route path="/"     element={<WelcomePage />} />
+          <Route path="/auth" element={<AuthPage />} />
 
-            {/* ── Protected routes — redirect to /auth if not logged in ── */}
-            <Route path="/dashboard"        element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-            <Route path="/user-profile"     element={<ProtectedRoute><UserProfile /></ProtectedRoute>} />
-            <Route path="/schedule-meeting" element={<ProtectedRoute><ScheduleMeeting /></ProtectedRoute>} />
-            <Route path="/join"             element={<ProtectedRoute><JoinMeeting /></ProtectedRoute>} />
-            <Route path="/new-meeting"      element={<ProtectedRoute><NewMeeting /></ProtectedRoute>} />
-            <Route path="/room/:roomId"     element={<ProtectedRoute><Room /></ProtectedRoute>} />
-            <Route path="/meetings"         element={<ProtectedRoute><MyMeetings /></ProtectedRoute>} />
-            <Route path="/recordings"       element={<ProtectedRoute><Recordings /></ProtectedRoute>} />
-            <Route path="/history"          element={<ProtectedRoute><History /></ProtectedRoute>} />
-            <Route path="/team"             element={<ProtectedRoute><Team /></ProtectedRoute>} />
-          </Routes>
-        </div>
+          {/* ── Protected ── */}
+          <Route path="/dashboard"        element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+          <Route path="/user-profile"     element={<ProtectedRoute><UserProfile /></ProtectedRoute>} />
+          <Route path="/schedule-meeting" element={<ProtectedRoute><ScheduleMeeting /></ProtectedRoute>} />
+          <Route path="/join"             element={<ProtectedRoute><JoinMeeting /></ProtectedRoute>} />
+          <Route path="/new-meeting"      element={<ProtectedRoute><NewMeeting /></ProtectedRoute>} />
+          <Route path="/room/:roomId"     element={<ProtectedRoute><Room /></ProtectedRoute>} />
+          <Route path="/meetings"         element={<ProtectedRoute><MyMeetings /></ProtectedRoute>} />
+          <Route path="/recordings"       element={<ProtectedRoute><Recordings /></ProtectedRoute>} />
+          <Route path="/history"          element={<ProtectedRoute><History /></ProtectedRoute>} />
+          <Route path="/team"             element={<ProtectedRoute><Team /></ProtectedRoute>} />
+
+          {/* ── 404 fallback ── */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
       </AuthProvider>
     </Router>
   );

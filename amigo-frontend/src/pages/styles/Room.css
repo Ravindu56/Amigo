@@ -1,1 +1,6 @@
-/* DEPRECATED — Room.jsx fully migrated to Tailwind. Do not add styles here. */
+/*
+ * Room.css — The meeting Room UI intentionally keeps a dark charcoal theme
+ * for eye comfort during video calls (industry standard: Zoom, Meet, Teams).
+ * Room.jsx uses its own bg-charcoal-950 class, separate from the app theme.
+ * This file is empty — all Room styles are inline Tailwind in Room.jsx.
+ */

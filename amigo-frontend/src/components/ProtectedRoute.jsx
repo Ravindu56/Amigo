@@ -1,10 +1,11 @@
 /**
  * ProtectedRoute
  *
- * Wraps any route that requires the user to be logged in.
- * - While the initial session check is in flight (loading=true) shows a spinner.
- * - If no user is found after the check, redirects to /auth.
- * - If the user is logged in, renders the child route normally.
+ * FIX:
+ *  - Spinner no longer uses #0f172a dark background — uses beige-50 + sage spinner
+ *  - While loading=true AND we have a cached user, we render children immediately
+ *    (prevents flash-of-redirect on refresh)
+ *  - Only shows spinner if there is no cached user at all
  */
 import React from 'react';
 import { Navigate } from 'react-router-dom';
@@ -13,29 +14,23 @@ import { useAuth } from '../context/AuthContext';
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
 
+  // If still verifying but we have a cached user — render immediately,
+  // background check is running concurrently in AuthContext
+  if (loading && user) return children;
+
+  // No cached user at all — show a themed spinner while the /me check runs
   if (loading) {
-    // Full-screen centered spinner — prevents flash of redirect
     return (
-      <div style={{
-        height: '100vh', display: 'flex',
-        alignItems: 'center', justifyContent: 'center',
-        background: '#0f172a',
-      }}>
-        <div style={{
-          width: 40, height: 40,
-          border: '4px solid #334155',
-          borderTop: '4px solid #818cf8',
-          borderRadius: '50%',
-          animation: 'spin 0.8s linear infinite',
-        }} />
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <div className="min-h-screen bg-beige-50 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-10 h-10 rounded-full border-4 border-beige-300 border-t-sage-500 animate-spin" />
+          <p className="text-sm text-charcoal-500 font-medium">Loading your workspace…</p>
+        </div>
       </div>
     );
   }
 
-  if (!user) {
-    return <Navigate to="/auth" replace />;
-  }
+  if (!user) return <Navigate to="/auth" replace />;
 
   return children;
 };

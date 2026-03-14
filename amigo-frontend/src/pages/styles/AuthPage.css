@@ -1,31 +1,6 @@
-.auth-page-container {
-  min-height: 100vh;
-  width: 100%; /* CHANGED: 100% prevents horizontal scrollbar caused by 100vw */
-  display: flex;
-  flex-direction: column;
-  background-color: #0f172a;
-  position: relative;
-  overflow-x: hidden; /* Ensures no horizontal scrolling occurs */
-}
-
-/* This pushes the footer down by taking up all available space */
-.auth-content-wrapper {
-  flex: 1; 
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 1;
-  padding: 20px;
-}
-
-.auth-blob {
-  position: absolute;
-  width: 600px;
-  height: 600px;
-  background: radial-gradient(circle, rgba(99,102,241,0.2) 0%, rgba(15,23,42,0) 70%);
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 0;
-  pointer-events: none;
-}
+/*
+ * AuthPage.css — DEPRECATED
+ *
+ * AuthForm.jsx uses Tailwind classes directly.
+ * This file is intentionally empty.
+ */
