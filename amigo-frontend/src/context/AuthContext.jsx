@@ -1,40 +1,36 @@
 /**
  * AuthContext — global authentication state
  *
- * FIX: User object is now persisted to localStorage as a warm-start cache.
- * On page refresh, we immediately restore from localStorage (so ProtectedRoute
- * doesn't flash-redirect to /auth) while the /api/auth/me verification runs
- * in the background. If /me returns 401, we clear the cache and redirect.
+ * FIX: Removed navigate() calls from checkSession entirely.
+ * Having navigate() inside AuthContext caused a race condition:
+ * when /api/auth/me resolved (even slightly after mount), it would
+ * call navigate('/auth') which overwrote any in-progress navigation
+ * (e.g. navigate('/user-profile')), landing the user on /auth or
+ * bouncing through to WelcomePage via the * catch-all.
  *
- * This fixes:
- *  - Redirect to /auth on every page refresh
- *  - "No token" errors on meeting API calls
+ * All redirect responsibility now belongs to ProtectedRoute, which
+ * already handles the !user case correctly.
  */
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 
-const API        = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-const CACHE_KEY  = 'amigo_user';
+const API       = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const CACHE_KEY = 'amigo_user';
 
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
-  const navigate = useNavigate();
-
-  // Warm-start from cache so ProtectedRoute never flashes a redirect
+  // Warm-start from localStorage so ProtectedRoute never flashes a redirect
   const cached = (() => {
     try { return JSON.parse(localStorage.getItem(CACHE_KEY)); }
     catch { return null; }
   })();
 
-  const [user,    setUser]    = useState(cached);   // start with cached user
-  const [loading, setLoading] = useState(true);     // still verify with server
+  const [user,    setUser]    = useState(cached);
+  const [loading, setLoading] = useState(true);
 
-  // -------------------------------------------------------------------------
-  // On mount: verify the session cookie with the server.
-  // We already have a cached user, so ProtectedRoute shows the page while
-  // this check runs. If the token is expired, we clear everything.
-  // -------------------------------------------------------------------------
+  // On mount: silently verify the session cookie with the server.
+  // We do NOT call navigate() here under any circumstances — ProtectedRoute
+  // is the single source of truth for redirect-on-unauthenticated.
   useEffect(() => {
     const checkSession = async () => {
       try {
@@ -47,24 +43,19 @@ export const AuthProvider = ({ children }) => {
           setUser(data);
           localStorage.setItem(CACHE_KEY, JSON.stringify(data));
         } else {
-          // Token expired or invalid — clear everything
+          // Token expired / invalid — clear state & cache.
+          // ProtectedRoute will redirect to /auth automatically.
           setUser(null);
           localStorage.removeItem(CACHE_KEY);
-          // Only redirect if we're on a protected page (not / or /auth)
-          const pub = ['/', '/auth'];
-          if (!pub.includes(window.location.pathname)) {
-            navigate('/auth', { replace: true });
-          }
         }
       } catch {
-        // Network error — keep cached user so offline use still works
-        // Don't redirect on network failures
+        // Network error — keep cached user so the app still works offline.
+        // Do NOT clear the user or redirect on a network failure.
       } finally {
         setLoading(false);
       }
     };
     checkSession();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const login = useCallback((userData) => {
@@ -80,17 +71,17 @@ export const AuthProvider = ({ children }) => {
     });
   }, []);
 
+  // logout: clear state then let the caller navigate (e.g. Header calls navigate('/auth'))
   const logout = useCallback(async () => {
     try {
       await fetch(`${API}/api/auth/logout`, {
         method: 'POST',
         credentials: 'include',
       });
-    } catch { /* ignore */ }
+    } catch { /* ignore network errors on logout */ }
     setUser(null);
     localStorage.removeItem(CACHE_KEY);
-    navigate('/auth', { replace: true });
-  }, [navigate]);
+  }, []);
 
   return (
     <AuthContext.Provider value={{ user, loading, login, logout, updateUser }}>

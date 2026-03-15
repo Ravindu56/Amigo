@@ -7,7 +7,6 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { getAvatarGradient } from '../design-tokens';
 
-// ── Nav definition ──────────────────────────────────────────────────
 const NAV_LINKS = [
   { label: 'Dashboard',   path: '/dashboard' },
   { label: 'Meetings',    path: '/meetings' },
@@ -16,25 +15,19 @@ const NAV_LINKS = [
   { label: 'Team',        path: '/team' },
 ];
 
-// ── Helpers ──────────────────────────────────────────────────────
 const getInitials = (name = '') =>
   name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
 
-// ── Component ─────────────────────────────────────────────────────
 const Header = () => {
-  const navigate  = useNavigate();
-  const location  = useLocation();
-  const { user, logout } = useAuth();
+  const navigate           = useNavigate();
+  const location           = useLocation();
+  const { user, logout }   = useAuth();
 
-  const [menuOpen,    setMenuOpen]    = useState(false);
-  const [mobileOpen,  setMobileOpen]  = useState(false);
-  const [searchOpen,  setSearchOpen]  = useState(false);
+  const [menuOpen,   setMenuOpen]   = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const dropdownRef = useRef(null);
 
-  // FIX: use 'click' (not 'mousedown') for outside-click detection.
-  // 'mousedown' fires BEFORE the button's onClick, which caused the dropdown
-  // to unmount before navigate() could execute — so clicks on dropdown items
-  // never fired their navigation handlers and the page stayed/redirected.
   useEffect(() => {
     const handler = (e) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target))
@@ -44,14 +37,16 @@ const Header = () => {
     return () => document.removeEventListener('click', handler);
   }, []);
 
+  // FIX: logout now just clears state in AuthContext; we handle the
+  // navigate('/auth') here so there's one clear owner of navigation.
   const handleLogout = async () => {
     await logout();
-    navigate('/auth');
+    navigate('/auth', { replace: true });
   };
 
   const isActive = (path) => location.pathname === path;
 
-  const initials  = getInitials(user?.fullName);
+  const initials   = getInitials(user?.fullName);
   const avatarGrad = getAvatarGradient(user?.id ?? 0);
 
   return (
@@ -59,7 +54,7 @@ const Header = () => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center h-16 gap-8">
 
-          {/* ─ Logo ─ */}
+          {/* Logo */}
           <button
             onClick={() => navigate('/dashboard')}
             className="flex items-center gap-2.5 flex-shrink-0 group"
@@ -67,12 +62,10 @@ const Header = () => {
             <div className="w-8 h-8 rounded-xl bg-gradient-sage flex items-center justify-center shadow-sage-sm group-hover:shadow-sage-md transition-shadow duration-200">
               <FaVideo className="text-white text-sm" />
             </div>
-            <span className="font-display font-bold text-lg text-charcoal-900 tracking-tight">
-              Amigo
-            </span>
+            <span className="font-display font-bold text-lg text-charcoal-900 tracking-tight">Amigo</span>
           </button>
 
-          {/* ─ Desktop Nav ─ */}
+          {/* Desktop Nav */}
           <nav className="hidden md:flex items-center gap-1 flex-1">
             {NAV_LINKS.map(({ label, path }) => (
               <button
@@ -93,28 +86,20 @@ const Header = () => {
             ))}
           </nav>
 
-          {/* ─ Right Controls ─ */}
+          {/* Right controls */}
           <div className="flex items-center gap-2 ml-auto">
 
             {/* Search */}
             {searchOpen ? (
               <div className="flex items-center gap-2 animate-scale-in">
-                <input
-                  autoFocus
-                  className="input w-48 text-sm"
-                  placeholder="Search..."
-                  onBlur={() => setSearchOpen(false)}
-                />
+                <input autoFocus className="input w-48 text-sm" placeholder="Search..."
+                  onBlur={() => setSearchOpen(false)} />
                 <button className="btn-icon" onClick={() => setSearchOpen(false)}>
                   <FaTimes className="text-xs" />
                 </button>
               </div>
             ) : (
-              <button
-                className="btn-icon"
-                onClick={() => setSearchOpen(true)}
-                title="Search"
-              >
+              <button className="btn-icon" onClick={() => setSearchOpen(true)} title="Search">
                 <FaSearch className="text-sm" />
               </button>
             )}
@@ -125,7 +110,7 @@ const Header = () => {
               <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-mint-500 border-2 border-beige-50" />
             </button>
 
-            {/* New Meeting quick-launch */}
+            {/* New Meeting */}
             <button
               className="hidden sm:flex btn-primary text-xs px-3 py-2 gap-1.5"
               onClick={() => navigate('/new-meeting')}
@@ -145,8 +130,7 @@ const Header = () => {
                 >
                   {user?.avatar
                     ? <img src={user.avatar} alt="" className="w-full h-full rounded-xl object-cover" />
-                    : initials
-                  }
+                    : initials}
                 </div>
                 <div className="hidden sm:flex flex-col items-start leading-none">
                   <span className="text-xs font-semibold text-charcoal-800">
@@ -157,7 +141,6 @@ const Header = () => {
                 <FaChevronDown className={`text-[10px] text-charcoal-400 transition-transform duration-200 ${menuOpen ? 'rotate-180' : ''}`} />
               </button>
 
-              {/* Dropdown menu */}
               {menuOpen && (
                 <div className="absolute right-0 top-full mt-2 w-52 bg-beige-50 border border-beige-300 rounded-2xl shadow-card-hover py-1.5 animate-scale-in z-50">
                   <div className="px-4 py-2.5 border-b border-beige-200">
@@ -191,17 +174,14 @@ const Header = () => {
             </div>
 
             {/* Mobile burger */}
-            <button
-              className="md:hidden btn-icon"
-              onClick={() => setMobileOpen(p => !p)}
-            >
+            <button className="md:hidden btn-icon" onClick={() => setMobileOpen(p => !p)}>
               {mobileOpen ? <FaTimes /> : <FaBars />}
             </button>
           </div>
         </div>
       </div>
 
-      {/* ─ Mobile nav drawer ─ */}
+      {/* Mobile nav drawer */}
       {mobileOpen && (
         <div className="md:hidden border-t border-beige-200 bg-beige-50 animate-slide-down">
           <nav className="px-4 py-3 flex flex-col gap-1">
