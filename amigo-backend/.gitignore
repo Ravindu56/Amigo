@@ -3,6 +3,7 @@
 # ============================================================
 
 # --- SECURITY: NEVER commit real environment files ---
+*.env
 .env
 .env.local
 .env.*.local
