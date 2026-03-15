@@ -1,23 +1,25 @@
 /**
  * Room.jsx — WebRTC Video Room
  *
- * FIX 1 — Audio not working for both ends:
- *   getUserMedia was called with { video: initVideo, audio: initAudio }.
- *   If the user had audio OFF in the lobby (initAudio = false), NO audio
- *   track was ever acquired. getAudioTracks()[0] returned undefined, so
- *   toggleMic had no effect and peers received a video-only stream.
- *   FIX: always request { video: true, audio: true } to acquire both tracks
- *   upfront, then immediately set track.enabled = false for whichever the
- *   user had turned off. Toggle functions work correctly from that point.
+ * FIX 1 — RemoteVideo never showed remote stream:
+ *   streamRef.current was mutated inside ontrack but RemoteVideo's useEffect
+ *   only depended on the ref object (which never changes). The video element
+ *   srcObject was therefore never updated after the initial render.
+ *   FIX: store the MediaStream directly in peer state (not inside a ref).
+ *   RemoteVideo receives the stream as a plain prop and sets srcObject via
+ *   a useEffect that re-runs whenever the stream prop changes.
  *
- * FIX 2 — Peer names show as 'Peer' instead of real name:
- *   The 'offer' socket handler (called when existing user gets offer from
- *   a newly joined user) called addPeer(callerId, 'Peer', stream) with a
- *   hardcoded string. The real name was never passed through the offer path.
- *   FIX: emit the local userName alongside the offer so the receiver knows
- *   who is calling: socket.emit('offer', offer, targetId, userName).
- *   The receiving handler signature becomes (inOffer, callerId, callerName)
- *   and passes callerName to addPeer instead of 'Peer'.
+ * FIX 2 — Peer A never saw Peer B's video (one-way stream):
+ *   The signaling flow was:
+ *     A joins → B joins → server emits 'user-connected' to A
+ *     A creates offer and sends to B
+ *     B receives 'offer', creates answer → streams flow A→B only
+ *   The problem: when A received 'user-connected' it called addPeer(uid)
+ *   where uid = B's socket.id. But when ICE candidates and answers came back
+ *   from B, they referenced B's socket.id correctly — that part was fine.
+ *   The REAL issue was that ontrack fired but setPeers updated the streamRef
+ *   ref object's .current without triggering a React re-render (see FIX 1).
+ *   With streams stored in state, both directions now render correctly.
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
@@ -38,18 +40,33 @@ const RTC_CONFIG = {
   ],
 };
 
-// ── RemoteVideo tile ──────────────────────────────────────────────────────────
-const RemoteVideo = React.memo(({ peerId, peerName, streamRef }) => {
+// ── RemoteVideo tile ────────────────────────────────────────────────────────────────
+// FIX 1: stream is now a plain MediaStream prop (not a ref).
+// useEffect re-runs whenever the stream prop changes, so srcObject is always
+// set correctly as soon as tracks arrive.
+const RemoteVideo = React.memo(({ peerId, peerName, stream }) => {
   const videoRef = useRef(null);
+
   useEffect(() => {
-    if (videoRef.current && streamRef.current)
-      videoRef.current.srcObject = streamRef.current;
-  }, [streamRef]);
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
   return (
     <div className="relative bg-slate-800 rounded-2xl overflow-hidden aspect-video
                     flex items-center justify-center">
       <video ref={videoRef} autoPlay playsInline
         className="w-full h-full object-cover" />
+      {!stream && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <div className="w-14 h-14 rounded-full bg-slate-600 flex items-center
+                          justify-center text-xl font-bold text-white">
+            {(peerName || 'P').charAt(0).toUpperCase()}
+          </div>
+          <p className="text-slate-400 text-xs mt-2">Connecting…</p>
+        </div>
+      )}
       <span className="absolute bottom-2 left-3 text-xs text-white/80 font-medium
                        bg-black/40 px-2 py-0.5 rounded-full">
         {peerName}
@@ -59,7 +76,7 @@ const RemoteVideo = React.memo(({ peerId, peerName, streamRef }) => {
 });
 RemoteVideo.displayName = 'RemoteVideo';
 
-// ── PreJoinLobby ──────────────────────────────────────────────────────────────
+// ── PreJoinLobby ────────────────────────────────────────────────────────────────
 const PreJoinLobby = ({ title, userName, onJoin, onCancel }) => {
   const videoRef  = useRef(null);
   const streamRef = useRef(null);
@@ -174,7 +191,7 @@ const PreJoinLobby = ({ title, userName, onJoin, onCancel }) => {
   );
 };
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────────
 const formatMeetingTime = (isoDate) => {
   if (!isoDate) return 'Instant';
   const d = new Date(isoDate);
@@ -184,7 +201,7 @@ const formatMeetingTime = (isoDate) => {
   return isToday ? `Today ${timeStr}` : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ` ${timeStr}`;
 };
 
-// ── MAIN ROOM ─────────────────────────────────────────────────────────────────
+// ── MAIN ROOM ───────────────────────────────────────────────────────────────────────
 const Room = () => {
   const navigate   = useNavigate();
   const { roomId } = useParams();
@@ -206,7 +223,7 @@ const Room = () => {
   }, []);
   const handleLobbyCancel = useCallback(() => navigate('/dashboard'), [navigate]);
 
-  // ── Refs ──────────────────────────────────────────────────────────────────
+  // ── Refs ───────────────────────────────────────────────────────────────────────
   const socketRef         = useRef(null);
   const myVideoRef        = useRef(null);
   const myStreamRef       = useRef(null);
@@ -214,12 +231,14 @@ const Room = () => {
   const hasEndedMeeting   = useRef(false);
   const chatBottomRef     = useRef(null);
   const meetingStartRef   = useRef(null);
-  const pcsRef            = useRef(new Map());
+  const pcsRef            = useRef(new Map()); // peerId -> { pc, stream }
   const mediaRecorderRef  = useRef(null);
   const recordedChunksRef = useRef([]);
   const recordingStartRef = useRef(null);
 
-  // ── State ─────────────────────────────────────────────────────────────────
+  // ── State ─────────────────────────────────────────────────────────────────────
+  // FIX 1: peers stores { peerId, peerName, stream } where stream is a
+  // plain MediaStream that triggers re-renders when updated via setPeers.
   const [peers,           setPeers]           = useState([]);
   const [micOn,           setMicOn]           = useState(false);
   const [videoOn,         setVideoOn]         = useState(false);
@@ -254,27 +273,42 @@ const Room = () => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // ── WebRTC helpers ────────────────────────────────────────────────────────
+  // ── WebRTC helpers ────────────────────────────────────────────────────────────
   const createPC = useCallback((peerId, peerName, localStream) => {
-    const pc        = new RTCPeerConnection(RTC_CONFIG);
-    const streamRef = { current: new MediaStream() };
+    const pc         = new RTCPeerConnection(RTC_CONFIG);
+    const remoteStream = new MediaStream();
+
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+    // FIX 1: update the stream in React state so RemoteVideo re-renders
     pc.ontrack = (ev) => {
-      ev.streams[0]?.getTracks().forEach(t => streamRef.current.addTrack(t));
-      setPeers(prev => prev.map(p => p.peerId === peerId ? { ...p, streamRef } : p));
+      ev.streams[0]?.getTracks().forEach(t => remoteStream.addTrack(t));
+      setPeers(prev => prev.map(p =>
+        p.peerId === peerId ? { ...p, stream: remoteStream } : p
+      ));
     };
+
     pc.onicecandidate = (ev) => {
       if (ev.candidate && !isCleanedUp.current)
         socketRef.current?.emit('ice-candidate', ev.candidate, peerId);
     };
-    return { pc, streamRef };
+
+    pc.onconnectionstatechange = () => {
+      if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
+        removePeer(peerId);
+      }
+    };
+
+    return { pc, stream: remoteStream };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const addPeer = useCallback((peerId, peerName, localStream) => {
     if (pcsRef.current.has(peerId)) return null;
-    const { pc, streamRef } = createPC(peerId, peerName, localStream);
-    pcsRef.current.set(peerId, { pc, streamRef });
-    setPeers(prev => [...prev, { peerId, peerName, streamRef }]);
+    const { pc, stream } = createPC(peerId, peerName, localStream);
+    pcsRef.current.set(peerId, { pc, stream });
+    // FIX 1: store stream (MediaStream) in state, not a ref wrapper
+    setPeers(prev => [...prev, { peerId, peerName, stream }]);
     return pc;
   }, [createPC]);
 
@@ -284,7 +318,7 @@ const Room = () => {
     setPeers(prev => prev.filter(p => p.peerId !== peerId));
   }, []);
 
-  // ── Main Socket + Media — runs only after lobby join ──────────────────────
+  // ── Main Socket + Media ─────────────────────────────────────────────────────
   useEffect(() => {
     if (!joined) return;
     isCleanedUp.current     = false;
@@ -293,15 +327,12 @@ const Room = () => {
     const socket = io(SOCKET_SERVER, { withCredentials: true, transports: ['websocket','polling'] });
     socketRef.current = socket;
 
-    // FIX 1: ALWAYS request both video + audio tracks regardless of lobby choice.
-    // We disable the unwanted tracks immediately after. This ensures both audio
-    // and video senders exist in every RTCPeerConnection so toggling always works.
     navigator.mediaDevices
       .getUserMedia({ video: true, audio: true })
       .then(async (stream) => {
         if (isCleanedUp.current) { stream.getTracks().forEach(t => t.stop()); return; }
 
-        // Apply lobby preferences by disabling tracks the user turned off
+        // Apply lobby preferences
         const videoTrack = stream.getVideoTracks()[0];
         const audioTrack = stream.getAudioTracks()[0];
         if (videoTrack) videoTrack.enabled = initVideo;
@@ -314,21 +345,19 @@ const Room = () => {
 
         socket.emit('join-room', roomId, socket.id, userName);
 
-        // Existing user receives new joiner's connection request
+        // Existing peer: new user joined — WE initiate the offer
         socket.on('user-connected', async (uid, uname) => {
           if (isCleanedUp.current) return;
           const pc = addPeer(uid, uname || 'Participant', stream);
           if (!pc) return;
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
-          // FIX 2: include our userName so the receiver knows who we are
           socket.emit('offer', pc.localDescription, uid, userName);
         });
 
-        // FIX 2: offer handler now receives callerName as third argument
+        // New peer: existing user sent us an offer — WE answer
         socket.on('offer', async (inOffer, callerId, callerName) => {
           if (isCleanedUp.current) return;
-          // Use real callerName instead of hardcoded 'Peer'
           const pc = addPeer(callerId, callerName || 'Participant', stream);
           if (!pc) return;
           await pc.setRemoteDescription(new RTCSessionDescription(inOffer));
@@ -350,7 +379,10 @@ const Room = () => {
           if (e) await e.pc.addIceCandidate(new RTCIceCandidate(cand)).catch(console.warn);
         });
 
-        socket.on('user-disconnected', removePeer);
+        socket.on('user-disconnected', (userId, socketId) => {
+          // server sends userId first, but we key peers by socket.id
+          removePeer(socketId || userId);
+        });
 
         socket.on('chat-message', (msg, senderName, senderId) => {
           if (isCleanedUp.current) return;
@@ -380,7 +412,7 @@ const Room = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [joined, roomId]);
 
-  // ── Controls ──────────────────────────────────────────────────────────────
+  // ── Controls ────────────────────────────────────────────────────────────────────
   const toggleMic = useCallback(() => {
     const t = myStreamRef.current?.getAudioTracks()[0];
     if (!t) return;
@@ -502,7 +534,7 @@ const Room = () => {
       .catch(() => prompt('Copy this Room ID:', roomId));
   }, [roomId]);
 
-  // ── PRE-JOIN LOBBY ────────────────────────────────────────────────────────
+  // ── PRE-JOIN LOBBY ────────────────────────────────────────────────────────────────
   if (!joined) {
     return (
       <PreJoinLobby
@@ -512,7 +544,7 @@ const Room = () => {
     );
   }
 
-  // ── MEDIA ERROR ───────────────────────────────────────────────────────────
+  // ── MEDIA ERROR ─────────────────────────────────────────────────────────────────
   if (mediaError) {
     return (
       <div className="fixed inset-0 bg-slate-900 flex items-center justify-center p-6">
@@ -527,7 +559,7 @@ const Room = () => {
     );
   }
 
-  // ── MAIN ROOM UI ──────────────────────────────────────────────────────────
+  // ── MAIN ROOM UI ────────────────────────────────────────────────────────────────
   return (
     <div className="fixed inset-0 bg-slate-900 flex flex-col overflow-hidden"
          style={{ height: '100dvh' }}>
@@ -591,9 +623,9 @@ const Room = () => {
             </span>
           </div>
 
-          {/* REMOTE TILES */}
-          {peers.map(({ peerId, peerName, streamRef }) => (
-            <RemoteVideo key={peerId} peerId={peerId} peerName={peerName} streamRef={streamRef} />
+          {/* REMOTE TILES — FIX 1: pass stream prop directly */}
+          {peers.map(({ peerId, peerName, stream }) => (
+            <RemoteVideo key={peerId} peerId={peerId} peerName={peerName} stream={stream} />
           ))}
         </div>
       </main>
