@@ -32,8 +32,8 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Handle preflight OPTIONS requests for all routes
-app.options('*', cors(corsOptions));
+// Handle preflight OPTIONS requests — Express 5 requires explicit regex path, not bare '*'
+app.options('/(.*)' , cors(corsOptions));
 
 app.use(express.json());
 app.use(cookieParser());
@@ -71,10 +71,8 @@ io.on('connection', (socket) => {
 
     console.log(`✅ ${userName} joined room [${roomId}] — ${rooms[roomId].length} user(s)`);
 
-    // Tell everyone else a new user arrived
     socket.to(roomId).emit('user-connected', userId, userName);
 
-    // Send the joining user the current participant list (excluding themselves)
     const others = rooms[roomId].filter(u => u.socketId !== socket.id);
     socket.emit('room-participants', others);
 
@@ -131,7 +129,6 @@ io.on('connection', (socket) => {
 });
 
 // ── Database sync + Server start ──────────────────────────────────────────
-// alter:true safely updates tables without dropping existing data
 db.sequelize.sync({ alter: true })
   .then(() => console.log('✅ Database synced (alter mode).'))
   .catch(err => console.error('❌ DB sync failed:', err.message));
