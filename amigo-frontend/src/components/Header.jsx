@@ -7,7 +7,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { getAvatarGradient } from '../design-tokens';
 
-// ── Nav definition ─────────────────────────────────────────────────────
+// ── Nav definition ──────────────────────────────────────────────────
 const NAV_LINKS = [
   { label: 'Dashboard',   path: '/dashboard' },
   { label: 'Meetings',    path: '/meetings' },
@@ -16,11 +16,11 @@ const NAV_LINKS = [
   { label: 'Team',        path: '/team' },
 ];
 
-// ── Helpers ──────────────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────
 const getInitials = (name = '') =>
   name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
 
-// ── Component ───────────────────────────────────────────────────────
+// ── Component ─────────────────────────────────────────────────────
 const Header = () => {
   const navigate  = useNavigate();
   const location  = useLocation();
@@ -162,14 +162,16 @@ const Header = () => {
                     <p className="text-xs text-charcoal-400 mt-0.5 truncate">{user?.email}</p>
                   </div>
                   <div className="py-1">
+                    {/* FIX: was navigating to '/profile' (unregistered) — corrected to '/user-profile' */}
                     <button
-                      onClick={() => { setMenuOpen(false); navigate('/profile'); }}
+                      onClick={() => { setMenuOpen(false); navigate('/user-profile'); }}
                       className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-charcoal-700 hover:bg-beige-100 hover:text-sage-700 transition-colors"
                     >
                       <FaUser className="text-charcoal-400" /> My Profile
                     </button>
+                    {/* FIX: was navigating to '/settings' (unregistered) — settings live on the profile page */}
                     <button
-                      onClick={() => { setMenuOpen(false); navigate('/settings'); }}
+                      onClick={() => { setMenuOpen(false); navigate('/user-profile', { state: { tab: 'settings' } }); }}
                       className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-charcoal-700 hover:bg-beige-100 hover:text-sage-700 transition-colors"
                     >
                       <FaCog className="text-charcoal-400" /> Settings
@@ -216,7 +218,19 @@ const Header = () => {
                 {label}
               </button>
             ))}
-            <div className="pt-2 border-t border-beige-200 mt-1">
+            <div className="pt-2 border-t border-beige-200 mt-1 space-y-1">
+              <button
+                className="w-full text-left px-3 py-2.5 rounded-xl text-sm font-medium text-charcoal-600 hover:bg-beige-200 transition-colors flex items-center gap-3"
+                onClick={() => { navigate('/user-profile'); setMobileOpen(false); }}
+              >
+                <FaUser className="text-charcoal-400" /> My Profile
+              </button>
+              <button
+                className="w-full text-left px-3 py-2.5 rounded-xl text-sm font-medium text-charcoal-600 hover:bg-beige-200 transition-colors flex items-center gap-3"
+                onClick={() => { navigate('/user-profile', { state: { tab: 'settings' } }); setMobileOpen(false); }}
+              >
+                <FaCog className="text-charcoal-400" /> Settings
+              </button>
               <button
                 className="btn-primary w-full justify-center"
                 onClick={() => { navigate('/new-meeting'); setMobileOpen(false); }}
