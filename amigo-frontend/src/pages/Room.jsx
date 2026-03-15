@@ -18,6 +18,27 @@ const RTC_CONFIG = {
   ],
 };
 
+// ── Session helpers ──────────────────────────────────────────────────────────
+// location.state is wiped on a browser refresh. We persist the room context
+// to sessionStorage so that a refresh → lobby → rejoin still uses the real
+// user name / meeting metadata instead of the fallback 'You'.
+const SESSION_KEY = (roomId) => `amigo_room_${roomId}`;
+
+function saveSession(roomId, data) {
+  try { sessionStorage.setItem(SESSION_KEY(roomId), JSON.stringify(data)); } catch (_) {}
+}
+
+function loadSession(roomId) {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY(roomId));
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) { return null; }
+}
+
+function clearSession(roomId) {
+  try { sessionStorage.removeItem(SESSION_KEY(roomId)); } catch (_) {}
+}
+
 // ── RemoteVideo ──────────────────────────────────────────────────────────────
 const RemoteVideo = React.memo(({ peerId, peerName, stream }) => {
   const videoRef = useRef(null);
@@ -144,12 +165,24 @@ const Room = () => {
   const { roomId } = useParams();
   const location   = useLocation();
 
+  // FIX REFRESH NAME: read from location.state first, then fall back to
+  // sessionStorage so a page refresh doesn't lose the real user name.
+  const session = loadSession(roomId);
+  const stateOrSession = location.state || session || {};
+
   const {
     meetingId = null,
     isHost    = false,
     userName  = 'You',
     title     = `Room ${roomId}`,
-  } = location.state || {};
+  } = stateOrSession;
+
+  // Persist to sessionStorage whenever we have fresh state from navigation
+  useEffect(() => {
+    if (location.state) {
+      saveSession(roomId, location.state);
+    }
+  }, [location.state, roomId]);
 
   const [joined,    setJoined]    = useState(false);
   const [initAudio, setInitAudio] = useState(true);
@@ -158,27 +191,30 @@ const Room = () => {
   const handleLobbyJoin   = useCallback(({ video, audio }) => {
     setInitVideo(video); setInitAudio(audio); setJoined(true);
   }, []);
-  const handleLobbyCancel = useCallback(() => navigate('/dashboard'), [navigate]);
+  const handleLobbyCancel = useCallback(() => {
+    clearSession(roomId);
+    navigate('/dashboard');
+  }, [navigate, roomId]);
 
   const socketRef         = useRef(null);
+  // Store socket.id in a ref so chat-message handler always has the latest value
+  const mySocketIdRef     = useRef(null);
   const myVideoRef        = useRef(null);
   const myStreamRef       = useRef(null);
   const isCleanedUp       = useRef(false);
   const hasEndedMeeting   = useRef(false);
   const chatBottomRef     = useRef(null);
   const meetingStartRef   = useRef(null);
-  // pcsRef   : socketId -> { pc, stream }
   const pcsRef            = useRef(new Map());
-  // FIX NAME: store names separately so they can be updated without
-  // recreating the RTCPeerConnection (avoids stale-closure problem).
-  const peerNamesRef      = useRef(new Map()); // socketId -> string
+  const peerNamesRef      = useRef(new Map());
   const mediaRecorderRef  = useRef(null);
   const recordedChunksRef = useRef([]);
   const recordingStartRef = useRef(null);
-  // FIX AUDIO RACE: store initAudio/initVideo in refs so the async
-  // getUserMedia callback always reads the latest value.
   const initAudioRef      = useRef(true);
   const initVideoRef      = useRef(true);
+  // Keep userName in a ref so chat callbacks always read the current value
+  const userNameRef       = useRef(userName);
+  useEffect(() => { userNameRef.current = userName; }, [userName]);
 
   const [peers,           setPeers]           = useState([]);
   const [micOn,           setMicOn]           = useState(true);
@@ -197,7 +233,6 @@ const Room = () => {
   const [recordingError,  setRecordingError]  = useState('');
   const [elapsed,         setElapsed]         = useState('00:00');
 
-  // Keep refs in sync with state so async callbacks always read latest values
   useEffect(() => { initAudioRef.current = initAudio; }, [initAudio]);
   useEffect(() => { initVideoRef.current = initVideo; }, [initVideo]);
 
@@ -218,7 +253,6 @@ const Room = () => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // FIX NAME: helper to update a peer's display name at any time
   const setPeerName = useCallback((peerId, name) => {
     if (!name || name === 'Participant') return;
     peerNamesRef.current.set(peerId, name);
@@ -227,26 +261,17 @@ const Room = () => {
     ));
   }, []);
 
-  // Creates (or returns existing) RTCPeerConnection for a peer.
-  // Uses pcsRef directly — no stale closure risk since it's a ref.
   const createPeer = useCallback((peerId, peerName, localStream) => {
-    // FIX NAME: always update name whenever we have a real one
     if (peerName && peerName !== 'Participant') {
       peerNamesRef.current.set(peerId, peerName);
     }
-
     if (pcsRef.current.has(peerId)) {
-      // PC already exists — just patch the name and return
       setPeerName(peerId, peerName);
       return pcsRef.current.get(peerId).pc;
     }
-
     const pc           = new RTCPeerConnection(RTC_CONFIG);
     const remoteStream = new MediaStream();
-
-    // Add ALL local tracks — audio MUST be added here so SDP includes it
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-
     pc.ontrack = (ev) => {
       ev.streams[0]?.getTracks().forEach(t => {
         if (!remoteStream.getTrackById(t.id)) remoteStream.addTrack(t);
@@ -255,17 +280,14 @@ const Room = () => {
         p.peerId === peerId ? { ...p, stream: remoteStream } : p
       ));
     };
-
     pc.onicecandidate = (ev) => {
       if (ev.candidate && !isCleanedUp.current)
         socketRef.current?.emit('ice-candidate', ev.candidate, peerId);
     };
-
     pc.onconnectionstatechange = () => {
       if (['failed', 'disconnected', 'closed'].includes(pc.connectionState))
         removePeer(peerId);
     };
-
     const resolvedName = peerNamesRef.current.get(peerId) || peerName || 'Participant';
     pcsRef.current.set(peerId, { pc, stream: remoteStream });
     setPeers(prev => {
@@ -295,14 +317,15 @@ const Room = () => {
     });
     socketRef.current = socket;
 
-    // FIX AUDIO RACE: acquire media first, register ALL listeners,
-    // then emit join-room. This guarantees room-participants is never
-    // missed due to a listener-registration race.
+    // Capture socket.id as soon as it connects so the chat handler
+    // can reliably identify the sender without a stale closure.
+    socket.on('connect', () => {
+      mySocketIdRef.current = socket.id;
+    });
+
     navigator.mediaDevices
       .getUserMedia({
         video: true,
-        // FIX AUDIO: explicit constraints ensure audio track is always
-        // present and fully negotiated in SDP regardless of enabled state.
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -315,22 +338,14 @@ const Room = () => {
         myStreamRef.current = stream;
         if (myVideoRef.current) myVideoRef.current.srcObject = stream;
 
-        // Apply lobby prefs via refs (no stale-closure risk)
         const videoTrack = stream.getVideoTracks()[0];
         const audioTrack = stream.getAudioTracks()[0];
-        // NOTE: set enabled BEFORE registering listeners / joining,
-        // but AFTER addTrack (which happens inside createPeer).
-        // Audio track enabled=true initially so SDP negotiates it;
-        // we flip it to the user's lobby choice right after.
         if (videoTrack) videoTrack.enabled = initVideoRef.current;
-        if (audioTrack) audioTrack.enabled = true; // always negotiate
+        if (audioTrack) audioTrack.enabled = true;
         setVideoOn(initVideoRef.current);
         setMicOn(initAudioRef.current);
 
-        // ── Register all listeners BEFORE joining the room ────────────
-        // This prevents room-participants from being missed if the server
-        // responds synchronously.
-
+        // ── Register ALL listeners before join-room ───────────────────
         socket.on('room-participants', async (participants) => {
           if (isCleanedUp.current) return;
           for (const { socketId, userName: pName } of participants) {
@@ -339,7 +354,9 @@ const Room = () => {
             try {
               const offer = await pc.createOffer();
               await pc.setLocalDescription(offer);
-              socket.emit('offer', pc.localDescription, socketId, userName);
+              // FIX REFRESH NAME: use userNameRef so the name sent in the
+              // offer is always the real name even after a page refresh.
+              socket.emit('offer', pc.localDescription, socketId, userNameRef.current);
             } catch (err) { console.warn('offer failed:', err); }
           }
         });
@@ -349,7 +366,6 @@ const Room = () => {
           const resolvedName = callerName || 'Participant';
           const pc = createPeer(callerId, resolvedName, stream);
           if (!pc) return;
-          // FIX NAME: patch name even if PC already existed (stale name case)
           setPeerName(callerId, resolvedName);
           if (pc.remoteDescription?.type) return;
           try {
@@ -375,21 +391,26 @@ const Room = () => {
 
         socket.on('user-disconnected', (socketId) => removePeer(socketId));
 
+        // FIX CHAT: use mySocketIdRef (updated on connect) instead of
+        // socket.id in a closure — avoids stale-id mismatches.
+        // The server echoes the message back to the sender too (io.in()),
+        // so we rely solely on senderId === mySocketIdRef to mark 'mine'.
         socket.on('chat-message', (msg, senderName, senderId) => {
           if (isCleanedUp.current) return;
+          const isMine = senderId === mySocketIdRef.current;
           setMessages(prev => [...prev, {
-            user: senderId === socket.id ? 'You' : senderName,
+            user: isMine ? 'You' : senderName,
             text: msg,
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            mine: senderId === socket.id,
+            mine: isMine,
           }]);
         });
 
-        // ── NOW join the room ─────────────────────────────────────────
-        socket.emit('join-room', roomId, userName);
+        // ── NOW join ─────────────────────────────────────────────────
+        // FIX REFRESH NAME: emit the real userName from ref, not the
+        // potentially stale 'You' fallback from location.state.
+        socket.emit('join-room', roomId, userNameRef.current);
 
-        // Apply mic-off lobby preference AFTER joining so audio track
-        // is already attached to peer connections via createPeer/addTrack.
         if (audioTrack && !initAudioRef.current) {
           audioTrack.enabled = false;
         }
@@ -411,7 +432,7 @@ const Room = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [joined, roomId]);
 
-  // ── Controls ─────────────────────────────────────────────────────────────
+  // ── Controls ──────────────────────────────────────────────────────────────
   const toggleMic = useCallback(() => {
     const t = myStreamRef.current?.getAudioTracks()[0];
     if (!t) return;
@@ -491,6 +512,7 @@ const Room = () => {
     if (isRecording) stopRecording();
     myStreamRef.current?.getTracks().forEach(t => t.stop());
     socketRef.current?.disconnect();
+    clearSession(roomId);
     if (isHost && !hasEndedMeeting.current) {
       hasEndedMeeting.current = true;
       await meetingAPI.end(roomId).catch(console.error);
@@ -502,9 +524,10 @@ const Room = () => {
     e.preventDefault();
     const t = newMessage.trim();
     if (!t) return;
-    socketRef.current?.emit('chat-message', t, userName, roomId);
+    // FIX REFRESH NAME: emit the real name from ref
+    socketRef.current?.emit('chat-message', t, userNameRef.current, roomId);
     setNewMessage('');
-  }, [newMessage, userName, roomId]);
+  }, [newMessage, roomId]);
 
   const toggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
