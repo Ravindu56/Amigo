@@ -38,10 +38,10 @@ exports.registerUser = async (req, res) => {
     generateToken(res, user.id);
 
     res.status(201).json({
-      id: user.id,
+      id:       user.id,
       fullName: user.fullName,
-      email: user.email,
-      pmi: user.pmi,
+      email:    user.email,
+      pmi:      user.pmi,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -66,33 +66,32 @@ exports.authUser = async (req, res) => {
     generateToken(res, user.id);
 
     res.json({
-      id: user.id,
+      id:       user.id,
       fullName: user.fullName,
-      email: user.email,
-      pmi: user.pmi,
-      avatar: user.avatar,
+      email:    user.email,
+      pmi:      user.pmi,
+      avatar:   user.avatar,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-// --- 3. GET CURRENT USER (session rehydration on page refresh) ---
+// --- 3. GET CURRENT USER ---
 exports.getMe = async (req, res) => {
-  // req.user is attached by the protect middleware
   const user = req.user;
   res.json({
-    id: user.id,
+    id:       user.id,
     fullName: user.fullName,
-    email: user.email,
-    pmi: user.pmi,
-    avatar: user.avatar,
-    phone: user.phone || '',
+    email:    user.email,
+    pmi:      user.pmi,
+    avatar:   user.avatar,
+    phone:    user.phone    || '',
     location: user.location || '',
     timezone: user.timezone || '',
-    company: user.company || '',
+    company:  user.company  || '',
     jobTitle: user.jobTitle || '',
-    bio: user.bio || '',
+    bio:      user.bio      || '',
   });
 };
 
@@ -113,17 +112,17 @@ exports.updateProfile = async (req, res) => {
     });
 
     res.json({
-      id: user.id,
+      id:       user.id,
       fullName: user.fullName,
-      email: user.email,
-      pmi: user.pmi,
-      avatar: user.avatar,
-      phone: user.phone || '',
+      email:    user.email,
+      pmi:      user.pmi,
+      avatar:   user.avatar,
+      phone:    user.phone    || '',
       location: user.location || '',
       timezone: user.timezone || '',
-      company: user.company || '',
+      company:  user.company  || '',
       jobTitle: user.jobTitle || '',
-      bio: user.bio || '',
+      bio:      user.bio      || '',
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -132,6 +131,12 @@ exports.updateProfile = async (req, res) => {
 
 // --- 5. LOGOUT ---
 exports.logoutUser = (req, res) => {
-  res.cookie('jwt', '', { httpOnly: true, expires: new Date(0) });
+  const isProd = process.env.NODE_ENV !== 'development';
+  res.cookie('jwt', '', {
+    httpOnly: true,
+    secure:   isProd,
+    sameSite: isProd ? 'none' : 'lax',
+    expires:  new Date(0),
+  });
   res.status(200).json({ message: 'Logged out successfully' });
 };
