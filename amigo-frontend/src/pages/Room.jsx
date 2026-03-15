@@ -1,20 +1,3 @@
-/**
- * Room.jsx — WebRTC Video Room
- *
- * FIXES in this version:
- * 1. AUDIO: getUserMedia now always requests audio:true without disabling it
- *    upfront. Audio track is enabled from the start so it is properly
- *    negotiated in SDP. Lobby "mic off" preference is honoured by disabling
- *    the track AFTER it is added to every peer connection — not before.
- *
- * 2. PARTICIPANT NAMES: peerName is now pulled from the server's room-store
- *    (via room-participants / offer callerName), which always reflects the
- *    logged-in user's fullName. Previously the name could arrive as undefined
- *    if the offer handler fired before the peer was fully registered.
- *
- * 3. THEME: all slate-* colours replaced with the app's Sage/Beige/Charcoal
- *    design tokens so the room UI matches every other page.
- */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { io } from 'socket.io-client';
@@ -35,7 +18,7 @@ const RTC_CONFIG = {
   ],
 };
 
-// ── RemoteVideo ─────────────────────────────────────────────────────────────────
+// ── RemoteVideo ──────────────────────────────────────────────────────────────
 const RemoteVideo = React.memo(({ peerId, peerName, stream }) => {
   const videoRef = useRef(null);
   useEffect(() => {
@@ -60,7 +43,7 @@ const RemoteVideo = React.memo(({ peerId, peerName, stream }) => {
 });
 RemoteVideo.displayName = 'RemoteVideo';
 
-// ── PreJoinLobby ────────────────────────────────────────────────────────────────
+// ── PreJoinLobby ─────────────────────────────────────────────────────────────
 const PreJoinLobby = ({ title, userName, onJoin, onCancel }) => {
   const videoRef  = useRef(null);
   const streamRef = useRef(null);
@@ -155,7 +138,7 @@ const PreJoinLobby = ({ title, userName, onJoin, onCancel }) => {
   );
 };
 
-// ── MAIN ROOM ───────────────────────────────────────────────────────────────────────
+// ── MAIN ROOM ────────────────────────────────────────────────────────────────
 const Room = () => {
   const navigate   = useNavigate();
   const { roomId } = useParams();
@@ -184,10 +167,18 @@ const Room = () => {
   const hasEndedMeeting   = useRef(false);
   const chatBottomRef     = useRef(null);
   const meetingStartRef   = useRef(null);
+  // pcsRef   : socketId -> { pc, stream }
   const pcsRef            = useRef(new Map());
+  // FIX NAME: store names separately so they can be updated without
+  // recreating the RTCPeerConnection (avoids stale-closure problem).
+  const peerNamesRef      = useRef(new Map()); // socketId -> string
   const mediaRecorderRef  = useRef(null);
   const recordedChunksRef = useRef([]);
   const recordingStartRef = useRef(null);
+  // FIX AUDIO RACE: store initAudio/initVideo in refs so the async
+  // getUserMedia callback always reads the latest value.
+  const initAudioRef      = useRef(true);
+  const initVideoRef      = useRef(true);
 
   const [peers,           setPeers]           = useState([]);
   const [micOn,           setMicOn]           = useState(true);
@@ -206,6 +197,10 @@ const Room = () => {
   const [recordingError,  setRecordingError]  = useState('');
   const [elapsed,         setElapsed]         = useState('00:00');
 
+  // Keep refs in sync with state so async callbacks always read latest values
+  useEffect(() => { initAudioRef.current = initAudio; }, [initAudio]);
+  useEffect(() => { initVideoRef.current = initVideo; }, [initVideo]);
+
   useEffect(() => {
     const t = setInterval(() => {
       setTime(new Date());
@@ -223,13 +218,33 @@ const Room = () => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // FIX NAME: helper to update a peer's display name at any time
+  const setPeerName = useCallback((peerId, name) => {
+    if (!name || name === 'Participant') return;
+    peerNamesRef.current.set(peerId, name);
+    setPeers(prev => prev.map(p =>
+      p.peerId === peerId ? { ...p, peerName: name } : p
+    ));
+  }, []);
+
+  // Creates (or returns existing) RTCPeerConnection for a peer.
+  // Uses pcsRef directly — no stale closure risk since it's a ref.
   const createPeer = useCallback((peerId, peerName, localStream) => {
-    if (pcsRef.current.has(peerId)) return pcsRef.current.get(peerId).pc;
+    // FIX NAME: always update name whenever we have a real one
+    if (peerName && peerName !== 'Participant') {
+      peerNamesRef.current.set(peerId, peerName);
+    }
+
+    if (pcsRef.current.has(peerId)) {
+      // PC already exists — just patch the name and return
+      setPeerName(peerId, peerName);
+      return pcsRef.current.get(peerId).pc;
+    }
+
     const pc           = new RTCPeerConnection(RTC_CONFIG);
     const remoteStream = new MediaStream();
 
-    // FIX AUDIO: add ALL tracks (including audio) unconditionally.
-    // track.enabled controls mute state — never skip adding the track.
+    // Add ALL local tracks — audio MUST be added here so SDP includes it
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
     pc.ontrack = (ev) => {
@@ -240,19 +255,22 @@ const Room = () => {
         p.peerId === peerId ? { ...p, stream: remoteStream } : p
       ));
     };
+
     pc.onicecandidate = (ev) => {
       if (ev.candidate && !isCleanedUp.current)
         socketRef.current?.emit('ice-candidate', ev.candidate, peerId);
     };
+
     pc.onconnectionstatechange = () => {
-      if (['failed','disconnected','closed'].includes(pc.connectionState))
+      if (['failed', 'disconnected', 'closed'].includes(pc.connectionState))
         removePeer(peerId);
     };
 
+    const resolvedName = peerNamesRef.current.get(peerId) || peerName || 'Participant';
     pcsRef.current.set(peerId, { pc, stream: remoteStream });
     setPeers(prev => {
       if (prev.find(p => p.peerId === peerId)) return prev;
-      return [...prev, { peerId, peerName, stream: null }];
+      return [...prev, { peerId, peerName: resolvedName, stream: null }];
     });
     return pc;
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -260,63 +278,86 @@ const Room = () => {
 
   const removePeer = useCallback((peerId) => {
     const e = pcsRef.current.get(peerId);
-    if (e) { try { e.pc.close(); } catch(_){} pcsRef.current.delete(peerId); }
+    if (e) { try { e.pc.close(); } catch (_) {} pcsRef.current.delete(peerId); }
+    peerNamesRef.current.delete(peerId);
     setPeers(prev => prev.filter(p => p.peerId !== peerId));
   }, []);
 
+  // ── Main effect: media + socket ──────────────────────────────────────────
   useEffect(() => {
     if (!joined) return;
     isCleanedUp.current     = false;
     meetingStartRef.current = Date.now();
 
-    const socket = io(SOCKET_SERVER, { withCredentials: true, transports: ['websocket','polling'] });
+    const socket = io(SOCKET_SERVER, {
+      withCredentials: true,
+      transports: ['websocket', 'polling'],
+    });
     socketRef.current = socket;
 
-    // FIX AUDIO: always request audio:true so the track exists and is
-    // negotiated in SDP. We disable it AFTER adding to all peer connections.
+    // FIX AUDIO RACE: acquire media first, register ALL listeners,
+    // then emit join-room. This guarantees room-participants is never
+    // missed due to a listener-registration race.
     navigator.mediaDevices
-      .getUserMedia({ video: true, audio: true })
-      .then(async (stream) => {
+      .getUserMedia({
+        video: true,
+        // FIX AUDIO: explicit constraints ensure audio track is always
+        // present and fully negotiated in SDP regardless of enabled state.
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 48000,
+        },
+      })
+      .then((stream) => {
         if (isCleanedUp.current) { stream.getTracks().forEach(t => t.stop()); return; }
 
         myStreamRef.current = stream;
         if (myVideoRef.current) myVideoRef.current.srcObject = stream;
 
-        // Apply lobby preferences AFTER stream is ready
-        // Video track: disable if user turned camera off in lobby
+        // Apply lobby prefs via refs (no stale-closure risk)
         const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) videoTrack.enabled = initVideo;
-        setVideoOn(initVideo);
-
-        // Audio track: keep enabled:true always so WebRTC negotiates it.
-        // Then disable if user chose mic-off in lobby.
         const audioTrack = stream.getAudioTracks()[0];
-        if (audioTrack) audioTrack.enabled = initAudio;
-        setMicOn(initAudio);
+        // NOTE: set enabled BEFORE registering listeners / joining,
+        // but AFTER addTrack (which happens inside createPeer).
+        // Audio track enabled=true initially so SDP negotiates it;
+        // we flip it to the user's lobby choice right after.
+        if (videoTrack) videoTrack.enabled = initVideoRef.current;
+        if (audioTrack) audioTrack.enabled = true; // always negotiate
+        setVideoOn(initVideoRef.current);
+        setMicOn(initAudioRef.current);
 
-        socket.emit('join-room', roomId, userName);
+        // ── Register all listeners BEFORE joining the room ────────────
+        // This prevents room-participants from being missed if the server
+        // responds synchronously.
 
-        // New joiner: server gives us all existing participants — WE send offers
         socket.on('room-participants', async (participants) => {
           if (isCleanedUp.current) return;
           for (const { socketId, userName: pName } of participants) {
-            const pc = createPeer(socketId, pName || 'Participant', stream);
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            socket.emit('offer', pc.localDescription, socketId, userName);
+            const resolvedName = pName || 'Participant';
+            const pc = createPeer(socketId, resolvedName, stream);
+            try {
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              socket.emit('offer', pc.localDescription, socketId, userName);
+            } catch (err) { console.warn('offer failed:', err); }
           }
         });
 
-        // Existing peer: new joiner sends us an offer — WE answer
         socket.on('offer', async (inOffer, callerId, callerName) => {
           if (isCleanedUp.current) return;
-          const pc = createPeer(callerId, callerName || 'Participant', stream);
+          const resolvedName = callerName || 'Participant';
+          const pc = createPeer(callerId, resolvedName, stream);
           if (!pc) return;
+          // FIX NAME: patch name even if PC already existed (stale name case)
+          setPeerName(callerId, resolvedName);
           if (pc.remoteDescription?.type) return;
-          await pc.setRemoteDescription(new RTCSessionDescription(inOffer));
-          const ans = await pc.createAnswer();
-          await pc.setLocalDescription(ans);
-          socket.emit('answer', pc.localDescription, callerId);
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(inOffer));
+            const ans = await pc.createAnswer();
+            await pc.setLocalDescription(ans);
+            socket.emit('answer', pc.localDescription, callerId);
+          } catch (err) { console.warn('answer failed:', err); }
         });
 
         socket.on('answer', async (inAns, peerId) => {
@@ -339,10 +380,19 @@ const Room = () => {
           setMessages(prev => [...prev, {
             user: senderId === socket.id ? 'You' : senderName,
             text: msg,
-            time: new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }),
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             mine: senderId === socket.id,
           }]);
         });
+
+        // ── NOW join the room ─────────────────────────────────────────
+        socket.emit('join-room', roomId, userName);
+
+        // Apply mic-off lobby preference AFTER joining so audio track
+        // is already attached to peer connections via createPeer/addTrack.
+        if (audioTrack && !initAudioRef.current) {
+          audioTrack.enabled = false;
+        }
       })
       .catch(err => setMediaError(
         err.name === 'NotAllowedError'
@@ -353,13 +403,15 @@ const Room = () => {
     return () => {
       isCleanedUp.current = true;
       myStreamRef.current?.getTracks().forEach(t => t.stop());
-      pcsRef.current.forEach(({ pc }) => { try { pc.close(); } catch(_){} });
+      pcsRef.current.forEach(({ pc }) => { try { pc.close(); } catch (_) {} });
       pcsRef.current.clear();
+      peerNamesRef.current.clear();
       socket.disconnect();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [joined, roomId]);
 
+  // ── Controls ─────────────────────────────────────────────────────────────
   const toggleMic = useCallback(() => {
     const t = myStreamRef.current?.getAudioTracks()[0];
     if (!t) return;
@@ -403,7 +455,7 @@ const Room = () => {
     const stream = myStreamRef.current;
     if (!stream) return;
     setRecordingError('');
-    const mimeType = ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm','video/mp4']
+    const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4']
       .find(t => MediaRecorder.isTypeSupported(t)) || '';
     try {
       const rec = new MediaRecorder(stream, mimeType ? { mimeType } : {});
@@ -505,11 +557,9 @@ const Room = () => {
 
       {/* HEADER */}
       <header className="flex items-center justify-between px-4 py-2.5
-        bg-charcoal-900/90 backdrop-blur border-b border-charcoal-800
-        flex-shrink-0 z-10">
+        bg-charcoal-900/90 backdrop-blur border-b border-charcoal-800 flex-shrink-0 z-10">
         <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 text-xs font-semibold text-sage-400
-            bg-sage-900/40 px-2.5 py-1 rounded-full">
+          <span className="flex items-center gap-1.5 text-xs font-semibold text-sage-400 bg-sage-900/40 px-2.5 py-1 rounded-full">
             <FaLock className="text-[10px]" /> Secure
           </span>
           <span className="text-white font-semibold text-sm truncate max-w-[200px]">{title}</span>
@@ -523,11 +573,10 @@ const Room = () => {
           {recordingSaving && <span className="text-xs text-amber-400">Saving…</span>}
           {recordingError  && <span className="text-xs text-red-400">{recordingError}</span>}
           <span className="text-beige-400 text-xs">
-            {time.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}
+            {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </span>
           <button onClick={toggleFullscreen}
-            className="w-8 h-8 rounded-lg bg-charcoal-800 text-beige-300 hover:bg-charcoal-700
-              flex items-center justify-center text-sm transition-colors">
+            className="w-8 h-8 rounded-lg bg-charcoal-800 text-beige-300 hover:bg-charcoal-700 flex items-center justify-center text-sm transition-colors">
             {isFullscreen ? <FaCompress /> : <FaExpand />}
           </button>
         </div>
@@ -552,8 +601,7 @@ const Room = () => {
                 </div>
               </div>
             )}
-            <span className="absolute bottom-2 left-3 flex items-center gap-1.5
-              text-xs text-white/80 bg-black/40 px-2 py-0.5 rounded-full">
+            <span className="absolute bottom-2 left-3 flex items-center gap-1.5 text-xs text-white/80 bg-black/40 px-2 py-0.5 rounded-full">
               {userName} (You)
               {!micOn && <FaMicrophoneSlash className="text-red-400 text-[10px]" />}
             </span>
@@ -600,27 +648,23 @@ const Room = () => {
           </button>
           <button onClick={() => toggleSidePanel('participants')}
             className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200 relative
-              ${sidePanelOpen && activeTab === 'participants'
-                ? 'bg-mint-600 text-white' : 'bg-charcoal-800 text-beige-200 hover:bg-charcoal-700'}`}>
+              ${sidePanelOpen && activeTab === 'participants' ? 'bg-mint-600 text-white' : 'bg-charcoal-800 text-beige-200 hover:bg-charcoal-700'}`}>
             <FaUserFriends className="text-base" />
             <span>People</span>
-            <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-sage-500
-              text-white text-[9px] font-bold flex items-center justify-center">
+            <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-sage-500 text-white text-[9px] font-bold flex items-center justify-center">
               {peers.length + 1}
             </span>
           </button>
           <button onClick={() => toggleSidePanel('chat')}
             className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200
-              ${sidePanelOpen && activeTab === 'chat'
-                ? 'bg-mint-600 text-white' : 'bg-charcoal-800 text-beige-200 hover:bg-charcoal-700'}`}>
+              ${sidePanelOpen && activeTab === 'chat' ? 'bg-mint-600 text-white' : 'bg-charcoal-800 text-beige-200 hover:bg-charcoal-700'}`}>
             <FaComments className="text-base" />
             <span>Chat</span>
           </button>
         </div>
         <div className="min-w-[60px] flex justify-end">
           <button onClick={handleEndCall} disabled={endingCall}
-            className="flex flex-col items-center gap-0.5 px-4 py-2 rounded-xl text-xs font-bold
-              bg-red-600 text-white hover:bg-red-700 disabled:opacity-60 transition-all duration-200">
+            className="flex flex-col items-center gap-0.5 px-4 py-2 rounded-xl text-xs font-bold bg-red-600 text-white hover:bg-red-700 disabled:opacity-60 transition-all duration-200">
             <FaPhoneSlash className="text-base" />
             <span>{endingCall ? 'Ending…' : isHost ? 'End' : 'Leave'}</span>
           </button>
@@ -636,8 +680,7 @@ const Room = () => {
             {activeTab === 'chat' ? 'Meeting Chat' : `Participants (${peers.length + 1})`}
           </h3>
           <button onClick={() => setSidePanelOpen(false)}
-            className="w-7 h-7 rounded-lg bg-charcoal-800 text-beige-300 hover:bg-charcoal-700
-              flex items-center justify-center transition-colors">
+            className="w-7 h-7 rounded-lg bg-charcoal-800 text-beige-300 hover:bg-charcoal-700 flex items-center justify-center transition-colors">
             <FaChevronRight className="text-xs" />
           </button>
         </div>
@@ -662,12 +705,9 @@ const Room = () => {
             <form onSubmit={handleSendMessage} className="flex gap-2 p-3 border-t border-charcoal-800 flex-shrink-0">
               <input type="text" placeholder="Type a message…" value={newMessage}
                 onChange={e => setNewMessage(e.target.value)}
-                className="flex-1 bg-charcoal-800 border border-charcoal-700 rounded-xl
-                  px-3 py-2 text-sm text-white placeholder-beige-500
-                  focus:outline-none focus:ring-2 focus:ring-sage-500" />
+                className="flex-1 bg-charcoal-800 border border-charcoal-700 rounded-xl px-3 py-2 text-sm text-white placeholder-beige-500 focus:outline-none focus:ring-2 focus:ring-sage-500" />
               <button type="submit"
-                className="w-9 h-9 rounded-xl bg-sage-600 text-white hover:bg-sage-500
-                  flex items-center justify-center flex-shrink-0 transition-colors">
+                className="w-9 h-9 rounded-xl bg-sage-600 text-white hover:bg-sage-500 flex items-center justify-center flex-shrink-0 transition-colors">
                 <FaPaperPlane className="text-xs" />
               </button>
             </form>
@@ -700,8 +740,7 @@ const Room = () => {
               </div>
             ))}
             <button onClick={copyRoomId}
-              className="w-full mt-4 py-2.5 rounded-xl bg-charcoal-800 text-beige-300 text-sm
-                font-semibold hover:bg-charcoal-700 transition-colors">
+              className="w-full mt-4 py-2.5 rounded-xl bg-charcoal-800 text-beige-300 text-sm font-semibold hover:bg-charcoal-700 transition-colors">
               Copy Room ID
             </button>
           </div>
