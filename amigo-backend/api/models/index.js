@@ -2,14 +2,15 @@ const dbConfig = require('../config/db.config.js');
 const Sequelize = require('sequelize');
 
 const sequelize = new Sequelize(dbConfig.DB, dbConfig.USER, dbConfig.PASSWORD, {
-  host: dbConfig.HOST,
-  dialect: dbConfig.dialect,
-  operatorsAliases: 0,
+  host:           dbConfig.HOST,
+  port:           dbConfig.PORT,
+  dialect:        dbConfig.dialect,
+  dialectOptions: dbConfig.dialectOptions,
   pool: {
-    max: dbConfig.pool.max,
-    min: dbConfig.pool.min,
+    max:     dbConfig.pool.max,
+    min:     dbConfig.pool.min,
     acquire: dbConfig.pool.acquire,
-    idle: dbConfig.pool.idle,
+    idle:    dbConfig.pool.idle,
   },
   logging: false,
 });
@@ -18,14 +19,14 @@ const db = {};
 db.Sequelize = Sequelize;
 db.sequelize = sequelize;
 
-// ── Models ───────────────────────────────────────────────────────────────
+// ── Models ───────────────────────────────────────────────────────────────────
 db.users       = require('./User.js')(sequelize, Sequelize);
 db.meetings    = require('./Meeting.js')(sequelize, Sequelize);
 db.recordings  = require('./Recording.js')(sequelize, Sequelize);
 db.teams       = require('./Team.js')(sequelize, Sequelize);
 db.teamMembers = require('./TeamMember.js')(sequelize, Sequelize);
 
-// ── Associations ─────────────────────────────────────────────────────────
+// ── Associations ────────────────────────────────────────────────────────────
 
 // User ↔ Meeting
 db.users.hasMany(db.meetings,    { foreignKey: 'hostId', as: 'hostedMeetings' });
