@@ -18,18 +18,15 @@ const server = http.createServer(app);
 
 // ── CORS ──────────────────────────────────────────────────────────────────
 const allowedOrigins = [
-  // Production Vercel domains
   'https://amigo-teal.vercel.app',
   'https://amigo-ashy-rho.vercel.app',
   'https://amigo-git-master-ravindu56s-projects.vercel.app',
   'https://amigo-df3s7ag6i-ravindu56s-projects.vercel.app',
-  // Dynamic FRONTEND_URL env var (set this in Railway to your primary domain)
   process.env.FRONTEND_URL,
-  // Local development
   'http://localhost:5173',
   'http://localhost:3000',
   'http://localhost:4173',
-].filter(Boolean); // remove undefined if FRONTEND_URL is not set
+].filter(Boolean);
 
 app.use(cors({
   origin: allowedOrigins,
@@ -47,7 +44,6 @@ app.use('/api/meetings',   meetingRoutes);
 app.use('/api/recordings', recordingRoutes);
 app.use('/api/teams',      teamRoutes);
 
-// Health check
 app.get('/', (req, res) => {
   res.json({ status: '✅ Amigo Backend is running!', version: '2.0' });
 });
@@ -61,68 +57,59 @@ const io = new Server(server, {
   },
 });
 
-// Room tracking: { roomId: [{ socketId, userId, userName }] }
+// rooms: { roomId: { socketId: { socketId, userName } } }
 const rooms = {};
 
 io.on('connection', (socket) => {
   console.log(`⚡ New connection: ${socket.id}`);
 
-  socket.on('join-room', (roomId, userId, userName) => {
+  socket.on('join-room', (roomId, userName) => {
     socket.join(roomId);
-    if (!rooms[roomId]) rooms[roomId] = [];
-    rooms[roomId].push({ socketId: socket.id, userId, userName });
 
-    console.log(`✅ ${userName} joined room [${roomId}] — ${rooms[roomId].length} user(s)`);
+    if (!rooms[roomId]) rooms[roomId] = {};
+    rooms[roomId][socket.id] = { socketId: socket.id, userName };
 
-    socket.to(roomId).emit('user-connected', userId, userName);
+    const others = Object.values(rooms[roomId]).filter(u => u.socketId !== socket.id);
+    console.log(`✅ ${userName} [${socket.id}] joined [${roomId}] — ${Object.keys(rooms[roomId]).length} user(s)`);
 
-    const others = rooms[roomId].filter(u => u.socketId !== socket.id);
+    // Tell the NEW joiner about everyone already in the room
     socket.emit('room-participants', others);
 
-    socket.on('offer', (offer, targetSocketId) => {
-      io.to(targetSocketId).emit('offer', offer, socket.id);
-    });
+    // Tell EXISTING peers a new user joined (send new user's socketId + name)
+    socket.to(roomId).emit('user-connected', socket.id, userName);
+  });
 
-    socket.on('answer', (answer, targetSocketId) => {
-      io.to(targetSocketId).emit('answer', answer, socket.id);
-    });
+  // Relay offer: sender sends { offer, targetSocketId, callerName }
+  // Server forwards to target with sender's socket.id so target can reply
+  socket.on('offer', (offer, targetSocketId, callerName) => {
+    io.to(targetSocketId).emit('offer', offer, socket.id, callerName);
+  });
 
-    socket.on('ice-candidate', (candidate, targetSocketId) => {
-      io.to(targetSocketId).emit('ice-candidate', candidate, socket.id);
-    });
+  socket.on('answer', (answer, targetSocketId) => {
+    io.to(targetSocketId).emit('answer', answer, socket.id);
+  });
 
-    socket.on('chat-message', (message, senderName) => {
-      io.in(roomId).emit('chat-message', message, senderName, socket.id);
-    });
+  socket.on('ice-candidate', (candidate, targetSocketId) => {
+    io.to(targetSocketId).emit('ice-candidate', candidate, socket.id);
+  });
 
-    socket.on('toggle-audio', (isMuted) => {
-      socket.to(roomId).emit('peer-audio-toggle', socket.id, isMuted);
-    });
-
-    socket.on('toggle-video', (isOff) => {
-      socket.to(roomId).emit('peer-video-toggle', socket.id, isOff);
-    });
-
-    socket.on('screen-share-started', () => {
-      socket.to(roomId).emit('peer-screen-share-started', socket.id);
-    });
-
-    socket.on('screen-share-stopped', () => {
-      socket.to(roomId).emit('peer-screen-share-stopped', socket.id);
-    });
-
-    socket.on('disconnect', () => {
-      console.log(`❌ ${userName} left room [${roomId}]`);
-      socket.to(roomId).emit('user-disconnected', userId, socket.id);
-      if (rooms[roomId]) {
-        rooms[roomId] = rooms[roomId].filter(u => u.socketId !== socket.id);
-        if (rooms[roomId].length === 0) delete rooms[roomId];
-      }
-    });
+  socket.on('chat-message', (message, senderName, roomId) => {
+    io.in(roomId).emit('chat-message', message, senderName, socket.id);
   });
 
   socket.on('disconnect', () => {
     console.log(`❌ Disconnected: ${socket.id}`);
+    // Find which room this socket was in and notify peers
+    for (const roomId of Object.keys(rooms)) {
+      if (rooms[roomId][socket.id]) {
+        const { userName } = rooms[roomId][socket.id];
+        delete rooms[roomId][socket.id];
+        console.log(`❌ ${userName} left room [${roomId}]`);
+        io.to(roomId).emit('user-disconnected', socket.id);
+        if (Object.keys(rooms[roomId]).length === 0) delete rooms[roomId];
+        break;
+      }
+    }
   });
 });
 
