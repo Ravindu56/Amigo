@@ -18,14 +18,19 @@ const server = http.createServer(app);
 
 // ── CORS ──────────────────────────────────────────────────────────────────
 const allowedOrigins = [
-  process.env.FRONTEND_URL || 'http://localhost:5173',
+  // Production Vercel domains
+  'https://amigo-teal.vercel.app',
+  'https://amigo-ashy-rho.vercel.app',
+  'https://amigo-git-master-ravindu56s-projects.vercel.app',
+  'https://amigo-df3s7ag6i-ravindu56s-projects.vercel.app',
+  // Dynamic FRONTEND_URL env var (set this in Railway to your primary domain)
+  process.env.FRONTEND_URL,
+  // Local development
+  'http://localhost:5173',
   'http://localhost:3000',
   'http://localhost:4173',
-];
+].filter(Boolean); // remove undefined if FRONTEND_URL is not set
 
-// app.use(cors) with OPTIONS in methods handles preflight automatically.
-// Do NOT add a separate app.options() call — path-to-regexp v8 (Express 5)
-// rejects wildcard patterns like '*' or '/(.*)' at startup.
 app.use(cors({
   origin: allowedOrigins,
   credentials: true,
