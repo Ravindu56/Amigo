@@ -18,28 +18,21 @@ const RTC_CONFIG = {
   ],
 };
 
-// ── Session helpers ──────────────────────────────────────────────────────────
-// location.state is wiped on a browser refresh. We persist the room context
-// to sessionStorage so that a refresh → lobby → rejoin still uses the real
-// user name / meeting metadata instead of the fallback 'You'.
 const SESSION_KEY = (roomId) => `amigo_room_${roomId}`;
-
 function saveSession(roomId, data) {
   try { sessionStorage.setItem(SESSION_KEY(roomId), JSON.stringify(data)); } catch (_) {}
 }
-
 function loadSession(roomId) {
   try {
     const raw = sessionStorage.getItem(SESSION_KEY(roomId));
     return raw ? JSON.parse(raw) : null;
   } catch (_) { return null; }
 }
-
 function clearSession(roomId) {
   try { sessionStorage.removeItem(SESSION_KEY(roomId)); } catch (_) {}
 }
 
-// ── RemoteVideo ──────────────────────────────────────────────────────────────
+// ── RemoteVideo ───────────────────────────────────────────────────────────────
 const RemoteVideo = React.memo(({ peerId, peerName, stream }) => {
   const videoRef = useRef(null);
   useEffect(() => {
@@ -64,7 +57,7 @@ const RemoteVideo = React.memo(({ peerId, peerName, stream }) => {
 });
 RemoteVideo.displayName = 'RemoteVideo';
 
-// ── PreJoinLobby ─────────────────────────────────────────────────────────────
+// ── PreJoinLobby ──────────────────────────────────────────────────────────────
 const PreJoinLobby = ({ title, userName, onJoin, onCancel }) => {
   const videoRef  = useRef(null);
   const streamRef = useRef(null);
@@ -159,17 +152,14 @@ const PreJoinLobby = ({ title, userName, onJoin, onCancel }) => {
   );
 };
 
-// ── MAIN ROOM ────────────────────────────────────────────────────────────────
+// ── MAIN ROOM ─────────────────────────────────────────────────────────────────
 const Room = () => {
   const navigate   = useNavigate();
   const { roomId } = useParams();
   const location   = useLocation();
 
-  // FIX REFRESH NAME: read from location.state first, then fall back to
-  // sessionStorage so a page refresh doesn't lose the real user name.
-  const session = loadSession(roomId);
+  const session        = loadSession(roomId);
   const stateOrSession = location.state || session || {};
-
   const {
     meetingId = null,
     isHost    = false,
@@ -177,11 +167,8 @@ const Room = () => {
     title     = `Room ${roomId}`,
   } = stateOrSession;
 
-  // Persist to sessionStorage whenever we have fresh state from navigation
   useEffect(() => {
-    if (location.state) {
-      saveSession(roomId, location.state);
-    }
+    if (location.state) saveSession(roomId, location.state);
   }, [location.state, roomId]);
 
   const [joined,    setJoined]    = useState(false);
@@ -192,12 +179,10 @@ const Room = () => {
     setInitVideo(video); setInitAudio(audio); setJoined(true);
   }, []);
   const handleLobbyCancel = useCallback(() => {
-    clearSession(roomId);
-    navigate('/dashboard');
+    clearSession(roomId); navigate('/dashboard');
   }, [navigate, roomId]);
 
   const socketRef         = useRef(null);
-  // Store socket.id in a ref so chat-message handler always has the latest value
   const mySocketIdRef     = useRef(null);
   const myVideoRef        = useRef(null);
   const myStreamRef       = useRef(null);
@@ -212,7 +197,6 @@ const Room = () => {
   const recordingStartRef = useRef(null);
   const initAudioRef      = useRef(true);
   const initVideoRef      = useRef(true);
-  // Keep userName in a ref so chat callbacks always read the current value
   const userNameRef       = useRef(userName);
   useEffect(() => { userNameRef.current = userName; }, [userName]);
 
@@ -262,9 +246,7 @@ const Room = () => {
   }, []);
 
   const createPeer = useCallback((peerId, peerName, localStream) => {
-    if (peerName && peerName !== 'Participant') {
-      peerNamesRef.current.set(peerId, peerName);
-    }
+    if (peerName && peerName !== 'Participant') peerNamesRef.current.set(peerId, peerName);
     if (pcsRef.current.has(peerId)) {
       setPeerName(peerId, peerName);
       return pcsRef.current.get(peerId).pc;
@@ -305,7 +287,7 @@ const Room = () => {
     setPeers(prev => prev.filter(p => p.peerId !== peerId));
   }, []);
 
-  // ── Main effect: media + socket ──────────────────────────────────────────
+  // ── Main effect: socket + media ────────────────────────────────────────────
   useEffect(() => {
     if (!joined) return;
     isCleanedUp.current     = false;
@@ -317,20 +299,36 @@ const Room = () => {
     });
     socketRef.current = socket;
 
-    // Capture socket.id as soon as it connects so the chat handler
-    // can reliably identify the sender without a stale closure.
-    socket.on('connect', () => {
-      mySocketIdRef.current = socket.id;
-    });
+    // FIX 1: Sync mySocketIdRef on EVERY connect and reconnect.
+    // Previously only set once on first connect — if the socket reconnected
+    // the ref became stale and isMine checks always failed.
+    const onConnect = () => { mySocketIdRef.current = socket.id; };
+    socket.on('connect', onConnect);
+
+    // FIX 2: Register chat-message listener HERE, immediately after socket
+    // creation — NOT inside getUserMedia().then().
+    // Before this fix the listener was only registered after the camera
+    // permission prompt resolved. Any message arriving before that
+    // (e.g. from another participant already in the room) was silently lost.
+    // FIX 3: Define handler as a named function so socket.off() can remove
+    // the exact same reference and prevent duplicate listener stacking.
+    const onChatMessage = (msg, senderName, senderId) => {
+      if (isCleanedUp.current) return;
+      const isMine = senderId === mySocketIdRef.current;
+      setMessages(prev => [...prev, {
+        user: isMine ? 'You' : senderName,
+        text: msg,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        mine: isMine,
+      }]);
+    };
+    socket.off('chat-message');           // remove any stale duplicate first
+    socket.on('chat-message', onChatMessage);
 
     navigator.mediaDevices
       .getUserMedia({
         video: true,
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 48000,
-        },
+        audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 48000 },
       })
       .then((stream) => {
         if (isCleanedUp.current) { stream.getTracks().forEach(t => t.stop()); return; }
@@ -345,7 +343,6 @@ const Room = () => {
         setVideoOn(initVideoRef.current);
         setMicOn(initAudioRef.current);
 
-        // ── Register ALL listeners before join-room ───────────────────
         socket.on('room-participants', async (participants) => {
           if (isCleanedUp.current) return;
           for (const { socketId, userName: pName } of participants) {
@@ -354,8 +351,6 @@ const Room = () => {
             try {
               const offer = await pc.createOffer();
               await pc.setLocalDescription(offer);
-              // FIX REFRESH NAME: use userNameRef so the name sent in the
-              // offer is always the real name even after a page refresh.
               socket.emit('offer', pc.localDescription, socketId, userNameRef.current);
             } catch (err) { console.warn('offer failed:', err); }
           }
@@ -391,29 +386,9 @@ const Room = () => {
 
         socket.on('user-disconnected', (socketId) => removePeer(socketId));
 
-        // FIX CHAT: use mySocketIdRef (updated on connect) instead of
-        // socket.id in a closure — avoids stale-id mismatches.
-        // The server echoes the message back to the sender too (io.in()),
-        // so we rely solely on senderId === mySocketIdRef to mark 'mine'.
-        socket.on('chat-message', (msg, senderName, senderId) => {
-          if (isCleanedUp.current) return;
-          const isMine = senderId === mySocketIdRef.current;
-          setMessages(prev => [...prev, {
-            user: isMine ? 'You' : senderName,
-            text: msg,
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            mine: isMine,
-          }]);
-        });
-
-        // ── NOW join ─────────────────────────────────────────────────
-        // FIX REFRESH NAME: emit the real userName from ref, not the
-        // potentially stale 'You' fallback from location.state.
         socket.emit('join-room', roomId, userNameRef.current);
 
-        if (audioTrack && !initAudioRef.current) {
-          audioTrack.enabled = false;
-        }
+        if (audioTrack && !initAudioRef.current) audioTrack.enabled = false;
       })
       .catch(err => setMediaError(
         err.name === 'NotAllowedError'
@@ -423,6 +398,8 @@ const Room = () => {
 
     return () => {
       isCleanedUp.current = true;
+      socket.off('connect', onConnect);
+      socket.off('chat-message', onChatMessage);
       myStreamRef.current?.getTracks().forEach(t => t.stop());
       pcsRef.current.forEach(({ pc }) => { try { pc.close(); } catch (_) {} });
       pcsRef.current.clear();
@@ -432,7 +409,7 @@ const Room = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [joined, roomId]);
 
-  // ── Controls ──────────────────────────────────────────────────────────────
+  // ── Controls ───────────────────────────────────────────────────────────────
   const toggleMic = useCallback(() => {
     const t = myStreamRef.current?.getAudioTracks()[0];
     if (!t) return;
@@ -476,7 +453,7 @@ const Room = () => {
     const stream = myStreamRef.current;
     if (!stream) return;
     setRecordingError('');
-    const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4']
+    const mimeType = ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm','video/mp4']
       .find(t => MediaRecorder.isTypeSupported(t)) || '';
     try {
       const rec = new MediaRecorder(stream, mimeType ? { mimeType } : {});
@@ -524,7 +501,6 @@ const Room = () => {
     e.preventDefault();
     const t = newMessage.trim();
     if (!t) return;
-    // FIX REFRESH NAME: emit the real name from ref
     socketRef.current?.emit('chat-message', t, userNameRef.current, roomId);
     setNewMessage('');
   }, [newMessage, roomId]);
