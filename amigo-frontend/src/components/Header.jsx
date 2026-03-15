@@ -31,14 +31,17 @@ const Header = () => {
   const [searchOpen,  setSearchOpen]  = useState(false);
   const dropdownRef = useRef(null);
 
-  // Close dropdown on outside click
+  // FIX: use 'click' (not 'mousedown') for outside-click detection.
+  // 'mousedown' fires BEFORE the button's onClick, which caused the dropdown
+  // to unmount before navigate() could execute — so clicks on dropdown items
+  // never fired their navigation handlers and the page stayed/redirected.
   useEffect(() => {
     const handler = (e) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target))
         setMenuOpen(false);
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
   }, []);
 
   const handleLogout = async () => {
@@ -48,7 +51,7 @@ const Header = () => {
 
   const isActive = (path) => location.pathname === path;
 
-  const initials = getInitials(user?.fullName);
+  const initials  = getInitials(user?.fullName);
   const avatarGrad = getAvatarGradient(user?.id ?? 0);
 
   return (
@@ -162,14 +165,12 @@ const Header = () => {
                     <p className="text-xs text-charcoal-400 mt-0.5 truncate">{user?.email}</p>
                   </div>
                   <div className="py-1">
-                    {/* FIX: was navigating to '/profile' (unregistered) — corrected to '/user-profile' */}
                     <button
                       onClick={() => { setMenuOpen(false); navigate('/user-profile'); }}
                       className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-charcoal-700 hover:bg-beige-100 hover:text-sage-700 transition-colors"
                     >
                       <FaUser className="text-charcoal-400" /> My Profile
                     </button>
-                    {/* FIX: was navigating to '/settings' (unregistered) — settings live on the profile page */}
                     <button
                       onClick={() => { setMenuOpen(false); navigate('/user-profile', { state: { tab: 'settings' } }); }}
                       className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-charcoal-700 hover:bg-beige-100 hover:text-sage-700 transition-colors"
