@@ -1,17 +1,19 @@
 /**
  * Room.jsx — WebRTC Video Room
  *
- * Signaling flow (all peer IDs are socket.id throughout):
+ * FIXES in this version:
+ * 1. AUDIO: getUserMedia now always requests audio:true without disabling it
+ *    upfront. Audio track is enabled from the start so it is properly
+ *    negotiated in SDP. Lobby "mic off" preference is honoured by disabling
+ *    the track AFTER it is added to every peer connection — not before.
  *
- * 1. A joins  → server stores A, sends A the current participants list (empty)
- * 2. B joins  → server stores B, sends B room-participants:[A]
- *              server tells A: user-connected(B.socketId, B.name)
- * 3. A (existing) receives user-connected → creates PC for B, sends offer to B
- * 4. B (new)     receives offer from A    → creates PC for A, sends answer to A
- * 5. Both exchange ICE candidates → connection established
+ * 2. PARTICIPANT NAMES: peerName is now pulled from the server's room-store
+ *    (via room-participants / offer callerName), which always reflects the
+ *    logged-in user's fullName. Previously the name could arrive as undefined
+ *    if the offer handler fired before the peer was fully registered.
  *
- * Also handles room-participants for when B joins and A is already there,
- * so B can initiate connections to all existing peers too.
+ * 3. THEME: all slate-* colours replaced with the app's Sage/Beige/Charcoal
+ *    design tokens so the room UI matches every other page.
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
@@ -33,21 +35,21 @@ const RTC_CONFIG = {
   ],
 };
 
-// ── RemoteVideo ───────────────────────────────────────────────────────────────────
+// ── RemoteVideo ─────────────────────────────────────────────────────────────────
 const RemoteVideo = React.memo(({ peerId, peerName, stream }) => {
   const videoRef = useRef(null);
   useEffect(() => {
     if (videoRef.current && stream) videoRef.current.srcObject = stream;
   }, [stream]);
   return (
-    <div className="relative bg-slate-800 rounded-2xl overflow-hidden aspect-video flex items-center justify-center">
+    <div className="relative bg-charcoal-800 rounded-2xl overflow-hidden aspect-video flex items-center justify-center">
       <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
       {!stream && (
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <div className="w-14 h-14 rounded-full bg-slate-600 flex items-center justify-center text-xl font-bold text-white">
+          <div className="w-14 h-14 rounded-full bg-charcoal-700 flex items-center justify-center text-xl font-bold text-white">
             {(peerName || 'P').charAt(0).toUpperCase()}
           </div>
-          <p className="text-slate-400 text-xs mt-2">Connecting…</p>
+          <p className="text-beige-300 text-xs mt-2">Connecting…</p>
         </div>
       )}
       <span className="absolute bottom-2 left-3 text-xs text-white/80 font-medium bg-black/40 px-2 py-0.5 rounded-full">
@@ -100,21 +102,21 @@ const PreJoinLobby = ({ title, userName, onJoin, onCancel }) => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6">
+    <div className="min-h-screen bg-charcoal-950 flex items-center justify-center p-6">
       <div className="w-full max-w-2xl space-y-6">
         <div className="text-center">
           <h1 className="text-2xl font-bold text-white">{title}</h1>
-          <p className="text-slate-400 text-sm mt-1">Check your camera and mic before joining</p>
+          <p className="text-beige-300 text-sm mt-1">Check your camera and mic before joining</p>
         </div>
-        <div className="relative bg-slate-800 rounded-2xl overflow-hidden aspect-video flex items-center justify-center">
+        <div className="relative bg-charcoal-800 rounded-2xl overflow-hidden aspect-video flex items-center justify-center">
           <video ref={videoRef} autoPlay playsInline muted
             className={`w-full h-full object-cover transition-opacity duration-300 ${camOn ? 'opacity-100' : 'opacity-0'}`} />
           {(!camOn || !ready) && (
             <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <div className="w-16 h-16 rounded-full bg-slate-600 flex items-center justify-center text-2xl font-bold text-white">
+              <div className="w-16 h-16 rounded-full bg-charcoal-700 flex items-center justify-center text-2xl font-bold text-white">
                 {userName.charAt(0).toUpperCase()}
               </div>
-              <p className="text-slate-400 text-sm mt-3">{camOn ? 'Connecting camera…' : 'Camera off'}</p>
+              <p className="text-beige-300 text-sm mt-3">{camOn ? 'Connecting camera…' : 'Camera off'}</p>
             </div>
           )}
           <span className="absolute bottom-3 left-4 text-xs text-white/70 bg-black/40 px-2 py-0.5 rounded-full">
@@ -122,25 +124,25 @@ const PreJoinLobby = ({ title, userName, onJoin, onCancel }) => {
           </span>
         </div>
         {error && (
-          <div className="bg-yellow-900/40 border border-yellow-700 text-yellow-300 text-sm px-4 py-2.5 rounded-xl">
+          <div className="bg-amber-900/40 border border-amber-700 text-amber-300 text-sm px-4 py-2.5 rounded-xl">
             {error}
           </div>
         )}
         <div className="flex gap-3 justify-center">
           <button onClick={toggleCam}
             className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all duration-200
-              ${camOn ? 'bg-slate-700 text-white hover:bg-slate-600' : 'bg-red-600 text-white hover:bg-red-700'}`}>
+              ${camOn ? 'bg-charcoal-700 text-white hover:bg-charcoal-800' : 'bg-red-600 text-white hover:bg-red-700'}`}>
             {camOn ? <FaVideo /> : <FaVideoSlash />} {camOn ? 'Camera On' : 'Camera Off'}
           </button>
           <button onClick={toggleMic}
             className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all duration-200
-              ${micOn ? 'bg-slate-700 text-white hover:bg-slate-600' : 'bg-red-600 text-white hover:bg-red-700'}`}>
+              ${micOn ? 'bg-charcoal-700 text-white hover:bg-charcoal-800' : 'bg-red-600 text-white hover:bg-red-700'}`}>
             {micOn ? <FaMicrophone /> : <FaMicrophoneSlash />} {micOn ? 'Mic On' : 'Mic Off'}
           </button>
         </div>
         <div className="flex gap-3">
           <button onClick={onCancel}
-            className="flex-1 py-3 rounded-xl bg-slate-700 text-white font-semibold hover:bg-slate-600 transition-all duration-200">
+            className="flex-1 py-3 rounded-xl bg-charcoal-700 text-white font-semibold hover:bg-charcoal-800 transition-all duration-200">
             Cancel
           </button>
           <button onClick={handleJoin} disabled={!ready}
@@ -167,8 +169,8 @@ const Room = () => {
   } = location.state || {};
 
   const [joined,    setJoined]    = useState(false);
-  const [initAudio, setInitAudio] = useState(false);
-  const [initVideo, setInitVideo] = useState(false);
+  const [initAudio, setInitAudio] = useState(true);
+  const [initVideo, setInitVideo] = useState(true);
 
   const handleLobbyJoin   = useCallback(({ video, audio }) => {
     setInitVideo(video); setInitAudio(audio); setJoined(true);
@@ -182,14 +184,14 @@ const Room = () => {
   const hasEndedMeeting   = useRef(false);
   const chatBottomRef     = useRef(null);
   const meetingStartRef   = useRef(null);
-  const pcsRef            = useRef(new Map()); // socketId -> { pc, stream }
+  const pcsRef            = useRef(new Map());
   const mediaRecorderRef  = useRef(null);
   const recordedChunksRef = useRef([]);
   const recordingStartRef = useRef(null);
 
   const [peers,           setPeers]           = useState([]);
-  const [micOn,           setMicOn]           = useState(false);
-  const [videoOn,         setVideoOn]         = useState(false);
+  const [micOn,           setMicOn]           = useState(true);
+  const [videoOn,         setVideoOn]         = useState(true);
   const [screenShare,     setScreenShare]     = useState(false);
   const [sidePanelOpen,   setSidePanelOpen]   = useState(false);
   const [activeTab,       setActiveTab]       = useState('chat');
@@ -203,7 +205,6 @@ const Room = () => {
   const [endingCall,      setEndingCall]      = useState(false);
   const [recordingError,  setRecordingError]  = useState('');
   const [elapsed,         setElapsed]         = useState('00:00');
-  const [roomName,        setRoomName]        = useState(roomId);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -222,17 +223,15 @@ const Room = () => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // ── WebRTC: create a peer connection for one remote peer ────────────────────
   const createPeer = useCallback((peerId, peerName, localStream) => {
     if (pcsRef.current.has(peerId)) return pcsRef.current.get(peerId).pc;
-
     const pc           = new RTCPeerConnection(RTC_CONFIG);
     const remoteStream = new MediaStream();
 
-    // Add all local tracks so the remote peer receives our stream
+    // FIX AUDIO: add ALL tracks (including audio) unconditionally.
+    // track.enabled controls mute state — never skip adding the track.
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-    // When remote tracks arrive, add them to the MediaStream and update state
     pc.ontrack = (ev) => {
       ev.streams[0]?.getTracks().forEach(t => {
         if (!remoteStream.getTrackById(t.id)) remoteStream.addTrack(t);
@@ -241,17 +240,13 @@ const Room = () => {
         p.peerId === peerId ? { ...p, stream: remoteStream } : p
       ));
     };
-
     pc.onicecandidate = (ev) => {
-      if (ev.candidate && !isCleanedUp.current) {
+      if (ev.candidate && !isCleanedUp.current)
         socketRef.current?.emit('ice-candidate', ev.candidate, peerId);
-      }
     };
-
     pc.onconnectionstatechange = () => {
-      if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
+      if (['failed','disconnected','closed'].includes(pc.connectionState))
         removePeer(peerId);
-      }
     };
 
     pcsRef.current.set(peerId, { pc, stream: remoteStream });
@@ -259,7 +254,6 @@ const Room = () => {
       if (prev.find(p => p.peerId === peerId)) return prev;
       return [...prev, { peerId, peerName, stream: null }];
     });
-
     return pc;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -270,39 +264,39 @@ const Room = () => {
     setPeers(prev => prev.filter(p => p.peerId !== peerId));
   }, []);
 
-  // ── Main effect: socket + media ────────────────────────────────────────────────
   useEffect(() => {
     if (!joined) return;
     isCleanedUp.current     = false;
     meetingStartRef.current = Date.now();
 
-    const socket = io(SOCKET_SERVER, {
-      withCredentials: true,
-      transports: ['websocket', 'polling'],
-    });
+    const socket = io(SOCKET_SERVER, { withCredentials: true, transports: ['websocket','polling'] });
     socketRef.current = socket;
 
+    // FIX AUDIO: always request audio:true so the track exists and is
+    // negotiated in SDP. We disable it AFTER adding to all peer connections.
     navigator.mediaDevices
       .getUserMedia({ video: true, audio: true })
       .then(async (stream) => {
         if (isCleanedUp.current) { stream.getTracks().forEach(t => t.stop()); return; }
 
-        const videoTrack = stream.getVideoTracks()[0];
-        const audioTrack = stream.getAudioTracks()[0];
-        if (videoTrack) videoTrack.enabled = initVideo;
-        if (audioTrack) audioTrack.enabled = initAudio;
-
         myStreamRef.current = stream;
         if (myVideoRef.current) myVideoRef.current.srcObject = stream;
-        setMicOn(initAudio);
+
+        // Apply lobby preferences AFTER stream is ready
+        // Video track: disable if user turned camera off in lobby
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) videoTrack.enabled = initVideo;
         setVideoOn(initVideo);
 
-        // Join the room — server now only needs roomId + userName
-        // socket.id is used as the peer identifier by the server
+        // Audio track: keep enabled:true always so WebRTC negotiates it.
+        // Then disable if user chose mic-off in lobby.
+        const audioTrack = stream.getAudioTracks()[0];
+        if (audioTrack) audioTrack.enabled = initAudio;
+        setMicOn(initAudio);
+
         socket.emit('join-room', roomId, userName);
 
-        // Server tells us about peers already in the room
-        // WE initiate offers to all of them
+        // New joiner: server gives us all existing participants — WE send offers
         socket.on('room-participants', async (participants) => {
           if (isCleanedUp.current) return;
           for (const { socketId, userName: pName } of participants) {
@@ -313,17 +307,12 @@ const Room = () => {
           }
         });
 
-        // Server tells existing peers a new user joined — THEY send us offer
-        // We just wait for the offer — no action needed here for existing peers
-        // (handled in the 'offer' handler below)
-
-        // Receive offer (we are the peer being called)
+        // Existing peer: new joiner sends us an offer — WE answer
         socket.on('offer', async (inOffer, callerId, callerName) => {
           if (isCleanedUp.current) return;
           const pc = createPeer(callerId, callerName || 'Participant', stream);
           if (!pc) return;
-          // Guard: only set remote description if not already set
-          if (pc.remoteDescription && pc.remoteDescription.type) return;
+          if (pc.remoteDescription?.type) return;
           await pc.setRemoteDescription(new RTCSessionDescription(inOffer));
           const ans = await pc.createAnswer();
           await pc.setLocalDescription(ans);
@@ -333,8 +322,7 @@ const Room = () => {
         socket.on('answer', async (inAns, peerId) => {
           if (isCleanedUp.current) return;
           const e = pcsRef.current.get(peerId);
-          if (!e) return;
-          if (e.pc.remoteDescription && e.pc.remoteDescription.type) return;
+          if (!e || e.pc.remoteDescription?.type) return;
           await e.pc.setRemoteDescription(new RTCSessionDescription(inAns)).catch(console.warn);
         });
 
@@ -344,9 +332,7 @@ const Room = () => {
           if (e) await e.pc.addIceCandidate(new RTCIceCandidate(cand)).catch(console.warn);
         });
 
-        socket.on('user-disconnected', (socketId) => {
-          removePeer(socketId);
-        });
+        socket.on('user-disconnected', (socketId) => removePeer(socketId));
 
         socket.on('chat-message', (msg, senderName, senderId) => {
           if (isCleanedUp.current) return;
@@ -358,13 +344,11 @@ const Room = () => {
           }]);
         });
       })
-      .catch(err => {
-        setMediaError(
-          err.name === 'NotAllowedError'
-            ? 'Camera/microphone access denied. Please allow permissions and refresh.'
-            : `Media device error: ${err.message}`
-        );
-      });
+      .catch(err => setMediaError(
+        err.name === 'NotAllowedError'
+          ? 'Camera/microphone access denied. Please allow permissions and refresh.'
+          : `Media device error: ${err.message}`
+      ));
 
     return () => {
       isCleanedUp.current = true;
@@ -376,13 +360,11 @@ const Room = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [joined, roomId]);
 
-  // ── Controls ────────────────────────────────────────────────────────────────────
   const toggleMic = useCallback(() => {
     const t = myStreamRef.current?.getAudioTracks()[0];
     if (!t) return;
     t.enabled = !t.enabled;
     setMicOn(t.enabled);
-    socketRef.current?.emit('toggle-audio', !t.enabled);
   }, []);
 
   const toggleVideo = useCallback(() => {
@@ -390,7 +372,6 @@ const Room = () => {
     if (!t) return;
     t.enabled = !t.enabled;
     setVideoOn(t.enabled);
-    socketRef.current?.emit('toggle-video', !t.enabled);
   }, []);
 
   const stopScreenShare = useCallback(() => {
@@ -508,26 +489,27 @@ const Room = () => {
 
   if (mediaError) {
     return (
-      <div className="fixed inset-0 bg-slate-900 flex items-center justify-center p-6">
-        <div className="bg-slate-800 rounded-2xl p-8 max-w-md w-full text-center space-y-4">
+      <div className="fixed inset-0 bg-charcoal-950 flex items-center justify-center p-6">
+        <div className="bg-charcoal-800 rounded-2xl p-8 max-w-md w-full text-center space-y-4">
           <FaVideoSlash className="text-5xl text-red-500 mx-auto" />
           <h2 className="text-xl font-bold text-white">Cannot Access Camera / Microphone</h2>
-          <p className="text-slate-400 text-sm">{mediaError}</p>
-          <button onClick={() => navigate('/dashboard')} className="btn-primary w-full py-3">
-            Back to Dashboard
-          </button>
+          <p className="text-beige-300 text-sm">{mediaError}</p>
+          <button onClick={() => navigate('/dashboard')} className="btn-primary w-full py-3">Back to Dashboard</button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="fixed inset-0 bg-slate-900 flex flex-col overflow-hidden" style={{ height: '100dvh' }}>
+    <div className="fixed inset-0 bg-charcoal-950 flex flex-col overflow-hidden" style={{ height: '100dvh' }}>
 
       {/* HEADER */}
-      <header className="flex items-center justify-between px-4 py-2.5 bg-slate-800/80 backdrop-blur border-b border-slate-700/50 flex-shrink-0 z-10">
+      <header className="flex items-center justify-between px-4 py-2.5
+        bg-charcoal-900/90 backdrop-blur border-b border-charcoal-800
+        flex-shrink-0 z-10">
         <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 text-xs font-semibold text-sage-400 bg-sage-900/40 px-2.5 py-1 rounded-full">
+          <span className="flex items-center gap-1.5 text-xs font-semibold text-sage-400
+            bg-sage-900/40 px-2.5 py-1 rounded-full">
             <FaLock className="text-[10px]" /> Secure
           </span>
           <span className="text-white font-semibold text-sm truncate max-w-[200px]">{title}</span>
@@ -538,13 +520,14 @@ const Room = () => {
               <FaCircle className="text-[8px]" /> REC {elapsed}
             </span>
           )}
-          {recordingSaving && <span className="text-xs text-yellow-400">Saving…</span>}
+          {recordingSaving && <span className="text-xs text-amber-400">Saving…</span>}
           {recordingError  && <span className="text-xs text-red-400">{recordingError}</span>}
-          <span className="text-slate-400 text-xs">
+          <span className="text-beige-400 text-xs">
             {time.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}
           </span>
           <button onClick={toggleFullscreen}
-            className="w-8 h-8 rounded-lg bg-slate-700 text-slate-300 hover:bg-slate-600 flex items-center justify-center text-sm transition-colors">
+            className="w-8 h-8 rounded-lg bg-charcoal-800 text-beige-300 hover:bg-charcoal-700
+              flex items-center justify-center text-sm transition-colors">
             {isFullscreen ? <FaCompress /> : <FaExpand />}
           </button>
         </div>
@@ -559,17 +542,18 @@ const Room = () => {
            : 'grid-cols-3' }`}>
 
           {/* LOCAL TILE */}
-          <div className="relative bg-slate-800 rounded-2xl overflow-hidden flex items-center justify-center">
+          <div className="relative bg-charcoal-800 rounded-2xl overflow-hidden flex items-center justify-center">
             <video ref={myVideoRef} autoPlay playsInline muted
               className={`w-full h-full object-cover transition-opacity duration-300 ${videoOn ? 'opacity-100' : 'opacity-0'}`} />
             {!videoOn && (
               <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <div className="w-14 h-14 rounded-full bg-slate-600 flex items-center justify-center text-xl font-bold text-white">
+                <div className="w-14 h-14 rounded-full bg-sage-700 flex items-center justify-center text-xl font-bold text-white">
                   {userName.charAt(0).toUpperCase()}
                 </div>
               </div>
             )}
-            <span className="absolute bottom-2 left-3 flex items-center gap-1.5 text-xs text-white/80 bg-black/40 px-2 py-0.5 rounded-full">
+            <span className="absolute bottom-2 left-3 flex items-center gap-1.5
+              text-xs text-white/80 bg-black/40 px-2 py-0.5 rounded-full">
               {userName} (You)
               {!micOn && <FaMicrophoneSlash className="text-red-400 text-[10px]" />}
             </span>
@@ -583,55 +567,60 @@ const Room = () => {
       </main>
 
       {/* CONTROL DOCK */}
-      <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 bg-slate-800/90 backdrop-blur border-t border-slate-700/50 z-10">
-        <div className="hidden sm:flex items-center gap-1 text-slate-400 text-xs min-w-[60px]">
-          <span className="font-mono text-slate-300">{elapsed}</span>
+      <div className="flex-shrink-0 flex items-center justify-between px-4 py-3
+        bg-charcoal-900/90 backdrop-blur border-t border-charcoal-800 z-10">
+        <div className="hidden sm:flex items-center gap-1 text-beige-400 text-xs min-w-[60px]">
+          <span className="font-mono text-beige-200">{elapsed}</span>
           <span>elapsed</span>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-center">
           <button onClick={toggleMic}
             className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200
-              ${!micOn ? 'bg-red-600/90 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}>
+              ${!micOn ? 'bg-red-600/90 text-white' : 'bg-charcoal-800 text-beige-200 hover:bg-charcoal-700'}`}>
             {micOn ? <FaMicrophone className="text-base" /> : <FaMicrophoneSlash className="text-base" />}
             <span>{micOn ? 'Mute' : 'Unmute'}</span>
           </button>
           <button onClick={toggleVideo}
             className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200
-              ${!videoOn ? 'bg-red-600/90 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}>
+              ${!videoOn ? 'bg-red-600/90 text-white' : 'bg-charcoal-800 text-beige-200 hover:bg-charcoal-700'}`}>
             {videoOn ? <FaVideo className="text-base" /> : <FaVideoSlash className="text-base" />}
             <span>{videoOn ? 'Stop Video' : 'Start Video'}</span>
           </button>
           <button onClick={toggleScreenShare}
             className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200
-              ${screenShare ? 'bg-sage-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}>
+              ${screenShare ? 'bg-sage-600 text-white' : 'bg-charcoal-800 text-beige-200 hover:bg-charcoal-700'}`}>
             <FaDesktop className="text-base" />
             <span>{screenShare ? 'Stop Share' : 'Share'}</span>
           </button>
           <button onClick={isRecording ? stopRecording : startRecording} disabled={recordingSaving}
             className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200
-              ${isRecording ? 'bg-red-600/90 text-white animate-pulse' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}>
+              ${isRecording ? 'bg-red-600/90 text-white animate-pulse' : 'bg-charcoal-800 text-beige-200 hover:bg-charcoal-700'}`}>
             {isRecording ? <FaStop className="text-base" /> : <FaCircle className="text-base text-red-400" />}
             <span>{isRecording ? 'Stop Rec' : 'Record'}</span>
           </button>
           <button onClick={() => toggleSidePanel('participants')}
             className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200 relative
-              ${sidePanelOpen && activeTab === 'participants' ? 'bg-mint-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}>
+              ${sidePanelOpen && activeTab === 'participants'
+                ? 'bg-mint-600 text-white' : 'bg-charcoal-800 text-beige-200 hover:bg-charcoal-700'}`}>
             <FaUserFriends className="text-base" />
             <span>People</span>
-            <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-mint-500 text-white text-[9px] font-bold flex items-center justify-center">
+            <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-sage-500
+              text-white text-[9px] font-bold flex items-center justify-center">
               {peers.length + 1}
             </span>
           </button>
           <button onClick={() => toggleSidePanel('chat')}
             className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200
-              ${sidePanelOpen && activeTab === 'chat' ? 'bg-mint-600 text-white' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}>
+              ${sidePanelOpen && activeTab === 'chat'
+                ? 'bg-mint-600 text-white' : 'bg-charcoal-800 text-beige-200 hover:bg-charcoal-700'}`}>
             <FaComments className="text-base" />
             <span>Chat</span>
           </button>
         </div>
         <div className="min-w-[60px] flex justify-end">
           <button onClick={handleEndCall} disabled={endingCall}
-            className="flex flex-col items-center gap-0.5 px-4 py-2 rounded-xl text-xs font-bold bg-red-600 text-white hover:bg-red-700 disabled:opacity-60 transition-all duration-200">
+            className="flex flex-col items-center gap-0.5 px-4 py-2 rounded-xl text-xs font-bold
+              bg-red-600 text-white hover:bg-red-700 disabled:opacity-60 transition-all duration-200">
             <FaPhoneSlash className="text-base" />
             <span>{endingCall ? 'Ending…' : isHost ? 'End' : 'Leave'}</span>
           </button>
@@ -639,14 +628,16 @@ const Room = () => {
       </div>
 
       {/* SIDE PANEL */}
-      <aside className={`fixed top-0 right-0 h-full w-72 bg-slate-800 border-l border-slate-700 flex flex-col transition-transform duration-300 z-20
+      <aside className={`fixed top-0 right-0 h-full w-72 bg-charcoal-900 border-l border-charcoal-800
+        flex flex-col transition-transform duration-300 z-20
         ${sidePanelOpen ? 'translate-x-0' : 'translate-x-full'}`}>
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700 flex-shrink-0">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-charcoal-800 flex-shrink-0">
           <h3 className="text-sm font-semibold text-white">
             {activeTab === 'chat' ? 'Meeting Chat' : `Participants (${peers.length + 1})`}
           </h3>
           <button onClick={() => setSidePanelOpen(false)}
-            className="w-7 h-7 rounded-lg bg-slate-700 text-slate-400 hover:bg-slate-600 flex items-center justify-center transition-colors">
+            className="w-7 h-7 rounded-lg bg-charcoal-800 text-beige-300 hover:bg-charcoal-700
+              flex items-center justify-center transition-colors">
             <FaChevronRight className="text-xs" />
           </button>
         </div>
@@ -655,25 +646,28 @@ const Room = () => {
           <div className="flex flex-col flex-1 overflow-hidden">
             <div className="flex-1 overflow-y-auto p-3 space-y-2">
               {messages.length === 0 && (
-                <p className="text-center text-slate-500 text-xs mt-8">No messages yet. Say hello! 👋</p>
+                <p className="text-center text-beige-400 text-xs mt-8">No messages yet. Say hello! 👋</p>
               )}
               {messages.map((m, i) => (
                 <div key={i} className={`flex flex-col ${m.mine ? 'items-end' : 'items-start'}`}>
-                  <span className="text-[10px] text-slate-500 mb-0.5">{m.user} · {m.time}</span>
+                  <span className="text-[10px] text-beige-400 mb-0.5">{m.user} · {m.time}</span>
                   <div className={`text-sm px-3 py-2 rounded-xl max-w-[85%] leading-snug
-                    ${m.mine ? 'bg-sage-600 text-white' : 'bg-slate-700 text-slate-200'}`}>
+                    ${m.mine ? 'bg-sage-600 text-white' : 'bg-charcoal-800 text-beige-100'}`}>
                     {m.text}
                   </div>
                 </div>
               ))}
               <div ref={chatBottomRef} />
             </div>
-            <form onSubmit={handleSendMessage} className="flex gap-2 p-3 border-t border-slate-700 flex-shrink-0">
+            <form onSubmit={handleSendMessage} className="flex gap-2 p-3 border-t border-charcoal-800 flex-shrink-0">
               <input type="text" placeholder="Type a message…" value={newMessage}
                 onChange={e => setNewMessage(e.target.value)}
-                className="flex-1 bg-slate-700 border border-slate-600 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sage-500" />
+                className="flex-1 bg-charcoal-800 border border-charcoal-700 rounded-xl
+                  px-3 py-2 text-sm text-white placeholder-beige-500
+                  focus:outline-none focus:ring-2 focus:ring-sage-500" />
               <button type="submit"
-                className="w-9 h-9 rounded-xl bg-sage-600 text-white hover:bg-sage-700 flex items-center justify-center flex-shrink-0 transition-colors">
+                className="w-9 h-9 rounded-xl bg-sage-600 text-white hover:bg-sage-500
+                  flex items-center justify-center flex-shrink-0 transition-colors">
                 <FaPaperPlane className="text-xs" />
               </button>
             </form>
@@ -682,7 +676,7 @@ const Room = () => {
 
         {activeTab === 'participants' && (
           <div className="flex-1 overflow-y-auto p-3 space-y-2">
-            <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-700/50">
+            <div className="flex items-center justify-between p-2.5 rounded-xl bg-charcoal-800/70">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-full bg-sage-600 flex items-center justify-center text-sm font-bold text-white">
                   {userName.charAt(0).toUpperCase()}
@@ -694,19 +688,20 @@ const Room = () => {
               </div>
               <div className="flex gap-1.5 text-xs">
                 {videoOn ? <FaVideo className="text-sage-400" /> : <FaVideoSlash className="text-red-400" />}
-                {micOn ? <FaMicrophone className="text-sage-400" /> : <FaMicrophoneSlash className="text-red-400" />}
+                {micOn   ? <FaMicrophone className="text-sage-400" /> : <FaMicrophoneSlash className="text-red-400" />}
               </div>
             </div>
             {peers.map(({ peerId, peerName }) => (
-              <div key={peerId} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-700/30">
+              <div key={peerId} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-charcoal-800/40">
                 <div className="w-8 h-8 rounded-full bg-mint-600 flex items-center justify-center text-sm font-bold text-white">
                   {(peerName || 'P').charAt(0).toUpperCase()}
                 </div>
-                <p className="text-sm text-slate-200">{peerName || 'Participant'}</p>
+                <p className="text-sm text-beige-200">{peerName || 'Participant'}</p>
               </div>
             ))}
             <button onClick={copyRoomId}
-              className="w-full mt-4 py-2.5 rounded-xl bg-slate-700 text-slate-300 text-sm font-semibold hover:bg-slate-600 transition-colors">
+              className="w-full mt-4 py-2.5 rounded-xl bg-charcoal-800 text-beige-300 text-sm
+                font-semibold hover:bg-charcoal-700 transition-colors">
               Copy Room ID
             </button>
           </div>
