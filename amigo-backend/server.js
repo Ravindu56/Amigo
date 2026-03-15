@@ -23,17 +23,15 @@ const allowedOrigins = [
   'http://localhost:4173',
 ];
 
-const corsOptions = {
+// app.use(cors) with OPTIONS in methods handles preflight automatically.
+// Do NOT add a separate app.options() call — path-to-regexp v8 (Express 5)
+// rejects wildcard patterns like '*' or '/(.*)' at startup.
+app.use(cors({
   origin: allowedOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Cookie'],
-};
-
-app.use(cors(corsOptions));
-
-// Handle preflight OPTIONS requests — Express 5 requires explicit regex path, not bare '*'
-app.options('/(.*)' , cors(corsOptions));
+}));
 
 app.use(express.json());
 app.use(cookieParser());
@@ -76,7 +74,6 @@ io.on('connection', (socket) => {
     const others = rooms[roomId].filter(u => u.socketId !== socket.id);
     socket.emit('room-participants', others);
 
-    // ── WebRTC signaling ──────────────────────────────────────────────
     socket.on('offer', (offer, targetSocketId) => {
       io.to(targetSocketId).emit('offer', offer, socket.id);
     });
@@ -89,12 +86,10 @@ io.on('connection', (socket) => {
       io.to(targetSocketId).emit('ice-candidate', candidate, socket.id);
     });
 
-    // ── In-room chat ──────────────────────────────────────────────────
     socket.on('chat-message', (message, senderName) => {
       io.in(roomId).emit('chat-message', message, senderName, socket.id);
     });
 
-    // ── Media state sync ──────────────────────────────────────────────
     socket.on('toggle-audio', (isMuted) => {
       socket.to(roomId).emit('peer-audio-toggle', socket.id, isMuted);
     });
@@ -103,7 +98,6 @@ io.on('connection', (socket) => {
       socket.to(roomId).emit('peer-video-toggle', socket.id, isOff);
     });
 
-    // ── Screen share ──────────────────────────────────────────────────
     socket.on('screen-share-started', () => {
       socket.to(roomId).emit('peer-screen-share-started', socket.id);
     });
@@ -112,7 +106,6 @@ io.on('connection', (socket) => {
       socket.to(roomId).emit('peer-screen-share-stopped', socket.id);
     });
 
-    // ── Disconnect ────────────────────────────────────────────────────
     socket.on('disconnect', () => {
       console.log(`❌ ${userName} left room [${roomId}]`);
       socket.to(roomId).emit('user-disconnected', userId, socket.id);
